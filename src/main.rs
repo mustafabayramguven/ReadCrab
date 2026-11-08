@@ -7,6 +7,7 @@ use std::{
 
 use kavita_rs::{
     app::{build_app, AppState},
+    auth::LoginLimiter,
     config::Config,
     db::Db,
 };
@@ -70,6 +71,7 @@ async fn main() {
     let state = AppState {
         db,
         cfg: Arc::new(cfg),
+        limiter: Arc::new(LoginLimiter::new()),
     };
     let app = build_app(state);
 

@@ -1,7 +1,7 @@
-use std::sync::Arc;
+use std::{net::SocketAddr, sync::Arc};
 
 use axum::{
-    extract::{DefaultBodyLimit, Path, Request, State},
+    extract::{ConnectInfo, DefaultBodyLimit, Path, Request, State},
     http::{header, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -10,7 +10,12 @@ use axum::{
 };
 use tower_http::catch_panic::CatchPanicLayer;
 
-use crate::{config::Config, db::Db, error::AppError};
+use crate::{
+    auth::{origin_and_content_type_guard, LoginLimiter},
+    config::Config,
+    db::Db,
+    error::AppError,
+};
 
 pub const APP_CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'self'";
 
@@ -32,6 +37,7 @@ const FONT_LATIN_EXT: &[u8] = include_bytes!("../web/fonts/roboto-flex-latin-ext
 pub struct AppState {
     pub db: Db,
     pub cfg: Arc<Config>,
+    pub limiter: Arc<LoginLimiter>,
 }
 
 pub fn build_app(state: AppState) -> Router {
@@ -39,7 +45,9 @@ pub fn build_app(state: AppState) -> Router {
         .route("/health", get(health_handler))
         .route("/", get(index_handler))
         .route("/static/{*ad}", get(static_handler))
+        .merge(crate::api::router())
         .layer(DefaultBodyLimit::max(64 * 1024))
+        .layer(middleware::from_fn(origin_and_content_type_guard))
         .layer(middleware::from_fn(security_headers))
         .layer(CatchPanicLayer::custom(|_| {
             AppError::Internal.into_response()
@@ -47,7 +55,11 @@ pub fn build_app(state: AppState) -> Router {
         .with_state(state)
 }
 
-async fn security_headers(req: Request, next: Next) -> Response {
+async fn security_headers(mut req: Request, next: Next) -> Response {
+    if req.extensions().get::<ConnectInfo<SocketAddr>>().is_none() {
+        req.extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
+    }
     let mut res = next.run(req).await;
     if res.status() == StatusCode::PAYLOAD_TOO_LARGE {
         let is_json = res
