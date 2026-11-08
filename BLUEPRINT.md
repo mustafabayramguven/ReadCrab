@@ -1450,3 +1450,24 @@ e2e sınamaları güçlenir: 27'deki sıfır çubuk yokluğu ve en az bir veri `
 6. **`kutuphane-bos` ekran görüntüsü (`scripts/e2e/reader.spec.mjs`).** Başlangıç taraması kitapları zaten bulduğu için görüntü boş durumu göstermiyor. Boş durumu ağ düzeyinde üret: `page.route('**/api/series*', r => r.fulfill({json:{total:0,items:[]}}))`, ekran görüntüsünü al ve `.empty` görünürlüğünü doğrula, sonra `unroute`. Aynı yöntemle arama sonuçsuz durumu `kutuphane-sonuc-yok` olarak alınır.
 
 Uygulama adı bu turda DEĞİŞTİRİLMEZ.
+
+---
+
+## 18. CEO düzeltme turu 3: son (önceki bölümlerle çelişirse bu bölüm kazanır)
+
+1. **401 döngüsü (`web/tracker.js`, `web/app.js`).**
+   - `flushProgress` ve ping yanıtı 401 ise: `pendingProgress = null`, oturum bekleyen verisi temizlenir, izleyici durdurulur, sonra YALNIZ `location.hash !== '#/giris'` ise `KRS.navigate('#/giris')`. `KRS.navigate` hedef hash zaten aynıysa ek `handleRoute` tetiklemez.
+   - Diğer kalıcı hatalar (400, 403, 404, 409, 413, 415, 422): `pendingProgress` silinir, yeniden denenmez.
+   - Yalnız ağ hatası, 429 ve 5xx'te korunur ve sonraki normal zamanlayıcıda yeniden denenir; ayrı yeniden deneme döngüsü kurulmaz.
+   - `tracker.stop()`: tek bir `keepalive` denemesi yapar, sonra `pendingProgress` ve kitap kimliği temizlenir; bekleyen veri başka kitaba ya da yeniden girişten sonraya taşınmaz. `tracker.start()` temiz başlar.
+   - e2e: okuyucu açıkken `context.clearCookies()`, sayfa ilerlet; `#/giris` görünür, 3 sn boyunca `/api/setup-status` en çok 2 kez çağrılır, giriş formu kaybolmaz.
+2. **Çok baytlı parola (`src/api/auth.rs`).** Login'deki `req.password.len() > 128` kaldırılır; yalnız `chars().count() > 128` kalır. Kullanıcı adı denetimi de karakter sayar. Test: `login_long_multibyte_password`: `"ş".repeat(100)` ile setup 201, aynı parolayla login 200.
+3. **Önbellek anahtarı (`src/api/reader.rs`, `src/formats/comic.rs`).** MOBI ve RAR/CBR önbellek anahtarı her istekte `std::fs::metadata` ile alınan gerçek `(yol, mtime, boyut)` üçlüsüdür; DB'deki `mtime` kullanılmaz. Test: `comic_pages_cache_detects_file_change`: `.cbr` tar fixture listele, dosyayı farklı sayfa sayısıyla değiştir (mtime farkını `File::set_modified` ile garanti et), yeni liste döner.
+4. **Küçük sertleştirmeler.**
+   - `src/scan.rs` `walk_dir_rec`: `entry.file_type()` hatası `read_dir` hatası gibi sayılır ve `tracing::error!` yazılır.
+   - `tests/auth_flow.rs login_rate_limit_burst`: `1 <= count_401 && count_401 <= 5` ve kalanı 429.
+   - `tests/library.rs scan_unreadable_root_keeps_books`: root altında atlanıyorsa `eprintln!("root: test atlandı")` yazar.
+   - `DUMMY_HASH`: `main.rs` serve başlangıcında `std::sync::LazyLock::force` ile bir kez üretilir (istek yolunda yürütücü bloklanmaz).
+   - `web/stats.js`: hedef kaydetme sonrası yeniden çizimin temizleme işlevi rota temizliğine kaydedilir, öncekini çağırır.
+
+Bilerek düzeltilmeyenler: hesap kilitleme tasarımı, ilk pingde süreyi kendi lehine şişirme, şifreli RAR'ın bozuk görünmesi, offset sayfalamada tarama sırasında tekrar eden kart, `krs.theme` göçü (kullanıcı yok), yayın imajının yeniden derlenmesi.
