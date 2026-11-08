@@ -6,6 +6,8 @@ pub mod admin;
 pub mod auth;
 pub mod library;
 pub mod reader;
+pub mod stats;
+pub mod tracking;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -13,4 +15,6 @@ pub fn router() -> Router<AppState> {
         .merge(admin::router())
         .merge(library::router())
         .merge(reader::router())
+        .merge(tracking::router())
+        .merge(stats::router())
 }

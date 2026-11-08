@@ -529,6 +529,23 @@ async fn deleted_file_hidden_but_history_kept() {
         .unwrap();
     assert_eq!(sessions_count, 1);
     assert_eq!(missing_flag, 1);
+
+    let hist_res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/history")
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(hist_res.status(), StatusCode::OK);
+    let hist_json = body_json(hist_res).await;
+    assert_eq!(hist_json["total"], 1);
+    assert_eq!(hist_json["items"][0]["book_id"], book_id);
+    assert_eq!(hist_json["items"][0]["book_missing"], true);
 }
 
 #[tokio::test]

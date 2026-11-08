@@ -69,10 +69,36 @@ async fn unauthenticated_endpoints_return_401() {
     let (app, _dirs) = test_app().await;
     let _cookie = login_as_admin(&app).await;
 
-    let endpoints = [("GET", "/api/me"), ("POST", "/api/logout")];
+    let endpoints = [
+        ("POST", "/api/logout"),
+        ("GET", "/api/me"),
+        ("PUT", "/api/me/password"),
+        ("GET", "/api/scan-status"),
+        ("GET", "/api/series"),
+        ("GET", "/api/series/1"),
+        ("GET", "/api/books/1"),
+        ("GET", "/api/books/1/cover"),
+        ("GET", "/api/books/1/pages"),
+        ("GET", "/api/books/1/pages/0"),
+        ("GET", "/api/books/1/toc"),
+        ("GET", "/api/books/1/chapters/0"),
+        ("GET", "/api/books/1/asset?p=1"),
+        ("GET", "/api/books/1/progress"),
+        ("PUT", "/api/books/1/progress"),
+        ("PUT", "/api/books/1/status"),
+        ("POST", "/api/reading/ping"),
+        ("GET", "/api/history"),
+        ("GET", "/api/stats?today=2026-11-08"),
+        ("PUT", "/api/goal"),
+        ("GET", "/api/admin/users"),
+        ("POST", "/api/admin/users"),
+        ("DELETE", "/api/admin/users/1"),
+        ("PUT", "/api/admin/users/1/password"),
+        ("POST", "/api/admin/scan"),
+    ];
     for (method, uri) in endpoints {
         let mut builder = Request::builder().method(method).uri(uri);
-        let body = if method == "POST" {
+        let body = if method != "GET" {
             builder = builder.header(header::CONTENT_TYPE, "application/json");
             Body::from("{}")
         } else {
