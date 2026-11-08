@@ -115,9 +115,8 @@ async fn list_series(
             let matching_book_series: HashSet<i64> = if let Some(ref qf) = q_folded {
                 let mut bstmt =
                     conn.prepare("SELECT series_id, title FROM books WHERE missing = 0")?;
-                let pairs = bstmt.query_map([], |r| {
-                    Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
-                })?;
+                let pairs =
+                    bstmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
                 let mut set = HashSet::new();
                 for pair in pairs {
                     let (sid, title) = pair?;

@@ -864,12 +864,12 @@ async fn search_and_sort_turkish() {
     assert!(pos_cilt2 < pos_cilt10, "names: {names:?}");
 
     for (query_str, expected_count) in [
-        ("%C5%9Feker", 2),       // şeker -> matches "Cilt 10" (ŞEKER) and "şeker"
-        ("%C5%9EEKER", 2),       // ŞEKER -> matches both
-        ("%C4%B1rmak", 2),       // ırmak -> matches "Cilt 2" (IRMAK) and "ırmak"
-        ("IRMAK", 2),            // IRMAK -> matches both
-        ("%C4%B0stanbul", 2),    // İstanbul -> matches "İstanbul Hatırası" and "istanbul"
-        ("istanbul", 2),         // istanbul -> matches both
+        ("%C5%9Feker", 2),    // şeker -> matches "Cilt 10" (ŞEKER) and "şeker"
+        ("%C5%9EEKER", 2),    // ŞEKER -> matches both
+        ("%C4%B1rmak", 2),    // ırmak -> matches "Cilt 2" (IRMAK) and "ırmak"
+        ("IRMAK", 2),         // IRMAK -> matches both
+        ("%C4%B0stanbul", 2), // İstanbul -> matches "İstanbul Hatırası" and "istanbul"
+        ("istanbul", 2),      // istanbul -> matches both
     ] {
         let res = app
             .clone()
