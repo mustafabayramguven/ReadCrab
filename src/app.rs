@@ -1,4 +1,8 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{
+    net::SocketAddr,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
 use axum::{
     extract::{ConnectInfo, DefaultBodyLimit, Path, Request, State},
@@ -15,6 +19,7 @@ use crate::{
     config::Config,
     db::Db,
     error::AppError,
+    formats::mobi::MobiBook,
     scan::ScanStatus,
 };
 
@@ -34,12 +39,15 @@ const ICONS_SVG: &str = include_str!("../web/icons.svg");
 const FONT_LATIN: &[u8] = include_bytes!("../web/fonts/roboto-flex-latin.woff2");
 const FONT_LATIN_EXT: &[u8] = include_bytes!("../web/fonts/roboto-flex-latin-ext.woff2");
 
+pub type MobiCache = Mutex<Option<(PathBuf, i64, Arc<MobiBook>)>>;
+
 #[derive(Clone)]
 pub struct AppState {
     pub db: Db,
     pub cfg: Arc<Config>,
     pub scan: Arc<ScanStatus>,
     pub limiter: Arc<LoginLimiter>,
+    pub mobi_cache: Arc<MobiCache>,
 }
 
 pub fn build_app(state: AppState) -> Router {

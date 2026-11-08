@@ -178,6 +178,10 @@ fn epub_asset_only_manifest_images() {
     assert_eq!(mime, "image/png");
     assert!(bytes.starts_with(b"\x89PNG"));
 
+    let (bytes_sp, mime_sp) = epub_asset(&epub, &info, "OEBPS/images/foto %20 #1.png").unwrap();
+    assert_eq!(mime_sp, "image/png");
+    assert!(bytes_sp.starts_with(b"\x89PNG"));
+
     assert!(epub_asset(&epub, &info, "OEBPS/secret.txt").is_err());
     assert!(epub_asset(&epub, &info, "OEBPS/images/unlisted.png").is_err());
 }

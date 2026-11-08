@@ -1,7 +1,7 @@
 use std::{
     io::{Read, Write},
     net::{SocketAddr, TcpStream},
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -57,15 +57,22 @@ async fn main() {
         )
         .init();
 
-    if let Err(e) = std::fs::create_dir_all(cfg.data_dir.join("covers")) {
-        tracing::error!("veri dizini oluşturulamadı: {e}");
-        std::process::exit(1);
+    let covers_dir = cfg.data_dir.join("covers");
+    if let Err(e) = std::fs::create_dir_all(&covers_dir) {
+        eprintln!(
+            "Veri dizini oluşturulamadı ({}): {e}. Dizinin uid 10001 kullanıcısı için yazılabilir olduğundan emin olun.",
+            covers_dir.display()
+        );
+        std::process::exit(2);
     }
 
     let db_path = cfg.data_dir.join("kavita.db");
     let db = Db::open(&db_path).unwrap_or_else(|e| {
-        tracing::error!("veritabanı açılamadı: {e}");
-        std::process::exit(1);
+        eprintln!(
+            "Veritabanı açılamadı ({}): {e}. Dizinin uid 10001 kullanıcısı için yazılabilir olduğundan emin olun.",
+            db_path.display()
+        );
+        std::process::exit(2);
     });
 
     let port = cfg.port;
@@ -74,6 +81,7 @@ async fn main() {
         cfg: Arc::new(cfg),
         scan: Arc::new(ScanStatus::new()),
         limiter: Arc::new(LoginLimiter::new()),
+        mobi_cache: Arc::new(Mutex::new(None)),
     };
 
     let cleanup_db = state.db.clone();

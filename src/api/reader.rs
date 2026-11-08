@@ -1,7 +1,11 @@
-use std::path::PathBuf;
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use axum::{
-    extract::{Path, Query, State},
+    body::Bytes,
+    extract::{Path as AxumPath, Query, State},
     http::{header, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
@@ -11,18 +15,37 @@ use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    app::AppState,
+    app::{AppState, MobiCache},
     auth::AuthUser,
     error::AppError,
     formats::{
-        comic::{comic_pages, comic_read},
+        comic::{comic_pages_cached, comic_read},
         epub::{epub_asset, epub_chapter_html, epub_open},
-        mobi::mobi_open,
+        mobi::{mobi_open, MobiBook},
         sanitize::{frame_document, sanitize_chapter, SrcMode, FRAME_CSP},
         Format, FormatError, MAX_ENTRY_BYTES,
     },
     safepath::resolve_book_path,
 };
+
+// shortcut: tek kitaplık önbellek, iki kullanıcı dönüşümlü farklı MOBI okursa yeniden çözülür, gerekirse LRU
+fn open_mobi_cached(
+    cache: &MobiCache,
+    path: &Path,
+    mtime: i64,
+) -> Result<Arc<MobiBook>, FormatError> {
+    if let Some((cached_path, cached_mtime, book)) =
+        cache.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
+    {
+        if cached_path == path && *cached_mtime == mtime {
+            return Ok(book.clone());
+        }
+    }
+    let book = Arc::new(mobi_open(path)?);
+    *cache.lock().unwrap_or_else(|e| e.into_inner()) =
+        Some((path.to_path_buf(), mtime, book.clone()));
+    Ok(book)
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -38,14 +61,15 @@ struct BookMeta {
     format: Format,
     title: String,
     page_count: i64,
+    mtime: i64,
 }
 
 async fn load_book_meta(state: &AppState, id: i64) -> Result<BookMeta, AppError> {
-    let row: Option<(String, String, String, i64, Option<String>, i64)> = state
+    let row: Option<(String, String, String, i64, Option<String>, i64, i64)> = state
         .db
         .run(move |conn| {
             conn.query_row(
-                "SELECT rel_path, format, title, page_count, error, missing
+                "SELECT rel_path, format, title, page_count, error, missing, mtime
                  FROM books WHERE id = ?1",
                 rusqlite::params![id],
                 |r| {
@@ -56,6 +80,7 @@ async fn load_book_meta(state: &AppState, id: i64) -> Result<BookMeta, AppError>
                         r.get(3)?,
                         r.get(4)?,
                         r.get(5)?,
+                        r.get(6)?,
                     ))
                 },
             )
@@ -64,7 +89,7 @@ async fn load_book_meta(state: &AppState, id: i64) -> Result<BookMeta, AppError>
         })
         .await?;
 
-    let Some((rel_path, fmt_str, title, page_count, error, missing)) = row else {
+    let Some((rel_path, fmt_str, title, page_count, error, missing, mtime)) = row else {
         return Err(AppError::NotFound);
     };
     if missing != 0 {
@@ -84,6 +109,7 @@ async fn load_book_meta(state: &AppState, id: i64) -> Result<BookMeta, AppError>
         format,
         title,
         page_count,
+        mtime,
     })
 }
 
@@ -95,7 +121,7 @@ struct PagesRes {
 async fn get_pages(
     _user: AuthUser,
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    AxumPath(id): AxumPath<i64>,
 ) -> Result<Json<PagesRes>, AppError> {
     let meta = load_book_meta(&state, id).await?;
     if !meta.format.is_comic() {
@@ -125,7 +151,7 @@ fn image_mime_from_name(name: &str) -> &'static str {
 async fn get_page(
     _user: AuthUser,
     State(state): State<AppState>,
-    Path((id, n)): Path<(i64, usize)>,
+    AxumPath((id, n)): AxumPath<(i64, usize)>,
 ) -> Result<Response, AppError> {
     let meta = load_book_meta(&state, id).await?;
     if !meta.format.is_comic() {
@@ -134,7 +160,7 @@ async fn get_page(
         ));
     }
 
-    let pages = comic_pages(&meta.full_path, meta.format).await?;
+    let pages = comic_pages_cached(&meta.full_path, meta.format, meta.mtime).await?;
     let Some(member) = pages.get(n) else {
         return Err(AppError::NotFound);
     };
@@ -173,7 +199,7 @@ struct TocRes {
 async fn get_toc(
     _user: AuthUser,
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    AxumPath(id): AxumPath<i64>,
 ) -> Result<Json<TocRes>, AppError> {
     let meta = load_book_meta(&state, id).await?;
     if meta.format.is_comic() {
@@ -184,6 +210,8 @@ async fn get_toc(
 
     let full_path = meta.full_path;
     let format = meta.format;
+    let mtime = meta.mtime;
+    let mobi_cache = state.mobi_cache.clone();
     let chapters = tokio::task::spawn_blocking(move || -> Result<Vec<TocChapter>, FormatError> {
         match format {
             Format::Epub => {
@@ -195,7 +223,7 @@ async fn get_toc(
                     .collect())
             }
             Format::Mobi => {
-                let book = mobi_open(&full_path)?;
+                let book = open_mobi_cached(&mobi_cache, &full_path, mtime)?;
                 Ok((0..book.chapters.len())
                     .map(|i| TocChapter {
                         index: i,
@@ -215,7 +243,7 @@ async fn get_toc(
 async fn get_chapter(
     _user: AuthUser,
     State(state): State<AppState>,
-    Path((id, n)): Path<(i64, usize)>,
+    AxumPath((id, n)): AxumPath<(i64, usize)>,
 ) -> Result<Response, AppError> {
     let meta = load_book_meta(&state, id).await?;
     if meta.format.is_comic() {
@@ -227,6 +255,8 @@ async fn get_chapter(
     let full_path = meta.full_path;
     let format = meta.format;
     let book_title = meta.title;
+    let mtime = meta.mtime;
+    let mobi_cache = state.mobi_cache.clone();
 
     let doc_opt = tokio::task::spawn_blocking(move || -> Result<Option<String>, FormatError> {
         match format {
@@ -244,7 +274,7 @@ async fn get_chapter(
                 Ok(Some(frame_document(&body, &book_title)))
             }
             Format::Mobi => {
-                let book = mobi_open(&full_path)?;
+                let book = open_mobi_cached(&mobi_cache, &full_path, mtime)?;
                 let Some(raw) = book.chapters.get(n) else {
                     return Ok(None);
                 };
@@ -300,7 +330,7 @@ fn sniff_image_mime(bytes: &[u8]) -> &'static str {
 async fn get_asset(
     _user: AuthUser,
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    AxumPath(id): AxumPath<i64>,
     Query(query): Query<AssetQuery>,
 ) -> Result<Response, AppError> {
     let meta = load_book_meta(&state, id).await?;
@@ -316,14 +346,16 @@ async fn get_asset(
 
     let full_path = meta.full_path;
     let format = meta.format;
+    let mtime = meta.mtime;
+    let mobi_cache = state.mobi_cache.clone();
 
     let asset_opt =
-        tokio::task::spawn_blocking(move || -> Result<Option<(Vec<u8>, String)>, FormatError> {
+        tokio::task::spawn_blocking(move || -> Result<Option<(Bytes, String)>, FormatError> {
             match format {
                 Format::Epub => {
                     let info = epub_open(&full_path)?;
                     match epub_asset(&full_path, &info, &p) {
-                        Ok((bytes, mime)) => Ok(Some((bytes, mime))),
+                        Ok((bytes, mime)) => Ok(Some((Bytes::from(bytes), mime))),
                         Err(FormatError::Drm) => Err(FormatError::Drm),
                         Err(_) => Ok(None),
                     }
@@ -335,7 +367,7 @@ async fn get_asset(
                     if idx1 == 0 {
                         return Ok(None);
                     }
-                    let book = mobi_open(&full_path)?;
+                    let book = open_mobi_cached(&mobi_cache, &full_path, mtime)?;
                     let Some(bytes) = book.images.get(idx1 - 1).cloned() else {
                         return Ok(None);
                     };

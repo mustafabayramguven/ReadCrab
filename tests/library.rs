@@ -748,3 +748,142 @@ async fn non_utf8_name_skipped() {
     assert_eq!(books.len(), 1);
     assert_eq!(books[0]["title"], "gecerli");
 }
+
+#[tokio::test]
+async fn scan_unreadable_root_keeps_books() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (app, dirs) = test_app().await;
+    let cookie = login_as_admin(&app).await;
+
+    make_cbz(
+        dirs.books_dir.path(),
+        "Korunacak/kitap.cbz",
+        &[("p1.png", png(20, 20, [10, 20, 30]))],
+    );
+    assert!(scan_once(&dirs.state).await);
+
+    let root = dirs.books_dir.path();
+    std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    if std::fs::read_dir(root).is_ok() {
+        // root kullanıcısı olarak çalışıyorsa chmod 000 okumayı engellemez; alt dizini test et veya izinleri geri yükle
+        std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        return;
+    }
+
+    assert!(scan_once(&dirs.state).await);
+    std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let missing_cnt: i64 = dirs
+        .db
+        .run(|conn| {
+            conn.query_row("SELECT COUNT(*) FROM books WHERE missing = 1", [], |r| {
+                r.get(0)
+            })
+            .map_err(Into::into)
+        })
+        .await
+        .unwrap();
+    assert_eq!(missing_cnt, 0);
+
+    let series_res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/series")
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let series_json = body_json(series_res).await;
+    assert_eq!(series_json["total"], 1);
+}
+
+#[tokio::test]
+async fn search_and_sort_turkish() {
+    let (app, dirs) = test_app().await;
+    let cookie = login_as_admin(&app).await;
+
+    let img = png(16, 16, [50, 50, 50]);
+    make_cbz(
+        dirs.books_dir.path(),
+        "Cilt 10/ŞEKER Portakalı.cbz",
+        &[("p1.png", img.clone())],
+    );
+    make_cbz(
+        dirs.books_dir.path(),
+        "Cilt 2/IRMAK Kıyısı.cbz",
+        &[("p1.png", img.clone())],
+    );
+    make_cbz(
+        dirs.books_dir.path(),
+        "İstanbul Hatırası/kitap.cbz",
+        &[("p1.png", img.clone())],
+    );
+    make_cbz(
+        dirs.books_dir.path(),
+        "şeker/tatlı.cbz",
+        &[("p1.png", img.clone())],
+    );
+    make_cbz(
+        dirs.books_dir.path(),
+        "ırmak/su.cbz",
+        &[("p1.png", img.clone())],
+    );
+    make_cbz(
+        dirs.books_dir.path(),
+        "istanbul/boğaz.cbz",
+        &[("p1.png", img)],
+    );
+
+    assert!(scan_once(&dirs.state).await);
+
+    let sort_res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/series?sort=name")
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let sort_json = body_json(sort_res).await;
+    let names: Vec<&str> = sort_json["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["name"].as_str().unwrap())
+        .collect();
+    let pos_cilt2 = names.iter().position(|&n| n == "Cilt 2").unwrap();
+    let pos_cilt10 = names.iter().position(|&n| n == "Cilt 10").unwrap();
+    assert!(pos_cilt2 < pos_cilt10, "names: {names:?}");
+
+    for (query_str, expected_count) in [
+        ("%C5%9Feker", 2),       // şeker -> matches "Cilt 10" (ŞEKER) and "şeker"
+        ("%C5%9EEKER", 2),       // ŞEKER -> matches both
+        ("%C4%B1rmak", 2),       // ırmak -> matches "Cilt 2" (IRMAK) and "ırmak"
+        ("IRMAK", 2),            // IRMAK -> matches both
+        ("%C4%B0stanbul", 2),    // İstanbul -> matches "İstanbul Hatırası" and "istanbul"
+        ("istanbul", 2),         // istanbul -> matches both
+    ] {
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/series?q={query_str}"))
+                    .header(header::COOKIE, &cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "q={query_str}");
+        let json = body_json(res).await;
+        assert_eq!(json["total"], expected_count, "q={query_str}");
+    }
+}

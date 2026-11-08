@@ -248,11 +248,7 @@ async fn put_status(
     let user_id = user.id;
     let now = unix_now();
     let status = req.status;
-    let finished_date = if status == "finished" {
-        Some(req.local_date)
-    } else {
-        None
-    };
+    let local_date = req.local_date;
 
     let status_clone = status.clone();
     state
@@ -268,6 +264,25 @@ async fn put_status(
             if exists.is_none() {
                 return Err(AppError::NotFound);
             }
+
+            let prev: Option<(String, Option<String>)> = conn
+                .query_row(
+                    "SELECT status, finished_date
+                     FROM progress
+                     WHERE user_id = ?1 AND book_id = ?2",
+                    rusqlite::params![user_id, id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?;
+
+            let finished_date = if status_clone == "finished" {
+                match prev {
+                    Some((ref st, Some(ref d))) if st == "finished" => Some(d.clone()),
+                    _ => Some(local_date),
+                }
+            } else {
+                None
+            };
 
             conn.execute(
                 "INSERT INTO progress(
@@ -343,17 +358,20 @@ async fn reading_ping(
                 return Err(AppError::NotFound);
             }
 
-            let existing: Option<(i64, i64, i64, i64)> = conn
+            let existing: Option<(i64, i64, i64, i64, i64)> = conn
                 .query_row(
-                    "SELECT id, started_at, active_seconds, pages_read
+                    "SELECT id, book_id, started_at, active_seconds, pages_read
                      FROM reading_sessions
                      WHERE user_id = ?1 AND client_id = ?2",
                     rusqlite::params![user_id, req.client_id],
-                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
                 )
                 .optional()?;
 
-            if let Some((row_id, started_at, old_active, old_pages)) = existing {
+            if let Some((row_id, existing_book_id, started_at, old_active, old_pages)) = existing {
+                if existing_book_id != req.book_id {
+                    return Err(AppError::Conflict("Bu oturum başka bir kitaba ait."));
+                }
                 let upper_cap = (now - started_at).max(0) + 5;
                 let new_active = old_active.max(req.active_seconds).min(upper_cap);
                 let new_pages = old_pages.max(req.pages_read);

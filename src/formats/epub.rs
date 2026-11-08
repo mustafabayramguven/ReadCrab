@@ -162,19 +162,15 @@ pub fn epub_chapter_html(path: &Path, info: &EpubInfo, n: usize) -> Result<Strin
 }
 
 pub fn epub_asset(path: &Path, info: &EpubInfo, p: &str) -> Result<(Vec<u8>, String), FormatError> {
-    if p.contains("..") {
-        return Err(FormatError::Corrupt);
-    }
-    let norm = normalize_zip_path("", p).ok_or(FormatError::Corrupt)?;
     let mime = info
         .manifest_images
-        .get(&norm)
+        .get(p)
         .ok_or(FormatError::Corrupt)?
         .clone();
 
     let file = File::open(path)?;
     let mut archive = ZipArchive::new(file).map_err(|_| FormatError::Corrupt)?;
-    let bytes = read_zip_bytes(&mut archive, &norm, crate::formats::MAX_ENTRY_BYTES)?;
+    let bytes = read_zip_bytes(&mut archive, p, crate::formats::MAX_ENTRY_BYTES)?;
     Ok((bytes, mime))
 }
 
@@ -458,14 +454,34 @@ fn parse_nav_toc(xml: &str, nav_dir: &str, spine: &[String]) -> Vec<(String, usi
     }
     let mut reader = Reader::from_str(xml);
     let mut buf = Vec::new();
-    let mut out = Vec::new();
+    let mut toc_nav: Option<Vec<(String, usize)>> = None;
+    let mut first_nav: Option<Vec<(String, usize)>> = None;
+    let mut nav_depth: usize = 0;
+    let mut cur_is_toc = false;
+    let mut cur_is_ignored = false;
+    let mut cur_links: Vec<(String, usize)> = Vec::new();
     let mut current_href: Option<String> = None;
     let mut current_text = String::new();
 
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => {
-                if local_name(e.name().as_ref()).eq_ignore_ascii_case(b"a") {
+                let qname = e.name();
+                let lname = local_name(qname.as_ref());
+                if lname.eq_ignore_ascii_case(b"nav") {
+                    if nav_depth == 0 {
+                        let t = attr_value(e, b"type").unwrap_or_default();
+                        cur_is_toc = t
+                            .split_whitespace()
+                            .any(|tok| tok.eq_ignore_ascii_case("toc"));
+                        cur_is_ignored = t.split_whitespace().any(|tok| {
+                            tok.eq_ignore_ascii_case("landmarks")
+                                || tok.eq_ignore_ascii_case("page-list")
+                        });
+                        cur_links.clear();
+                    }
+                    nav_depth += 1;
+                } else if nav_depth > 0 && !cur_is_ignored && lname.eq_ignore_ascii_case(b"a") {
                     current_href = attr_value(e, b"href");
                     current_text.clear();
                 }
@@ -476,15 +492,29 @@ fn parse_nav_toc(xml: &str, nav_dir: &str, spine: &[String]) -> Vec<(String, usi
                 }
             }
             Ok(Event::End(ref e)) => {
-                if local_name(e.name().as_ref()).eq_ignore_ascii_case(b"a") {
+                let qname = e.name();
+                let lname = local_name(qname.as_ref());
+                if lname.eq_ignore_ascii_case(b"a") {
                     if let Some(href) = current_href.take() {
                         if let Some(norm) = normalize_zip_path(nav_dir, &href) {
                             if let Some(&idx) = spine_map.get(norm.as_str()) {
                                 let label = current_text.trim().to_string();
                                 if !label.is_empty() {
-                                    out.push((label, idx));
+                                    cur_links.push((label, idx));
                                 }
                             }
+                        }
+                    }
+                } else if lname.eq_ignore_ascii_case(b"nav") && nav_depth > 0 {
+                    nav_depth -= 1;
+                    if nav_depth == 0 && !cur_is_ignored {
+                        let taken = std::mem::take(&mut cur_links);
+                        if cur_is_toc {
+                            if toc_nav.is_none() {
+                                toc_nav = Some(taken);
+                            }
+                        } else if first_nav.is_none() {
+                            first_nav = Some(taken);
                         }
                     }
                 }
@@ -494,7 +524,7 @@ fn parse_nav_toc(xml: &str, nav_dir: &str, spine: &[String]) -> Vec<(String, usi
         }
         buf.clear();
     }
-    out
+    toc_nav.or(first_nav).unwrap_or_default()
 }
 
 fn parse_ncx_toc(xml: &str, ncx_dir: &str, spine: &[String]) -> Vec<(String, usize)> {

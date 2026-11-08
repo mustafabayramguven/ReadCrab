@@ -14,7 +14,7 @@ use crate::{
     app::AppState,
     auth::{
         build_session_cookie, extract_session_token, hash_password, new_session_token, token_hash,
-        unix_now, validate_password, validate_username, verify_password, AuthUser,
+        unix_now, validate_password, validate_username, verify_password, AuthUser, DUMMY_HASH,
         SESSION_TTL_SECS,
     },
     error::{AppError, JsonBody},
@@ -68,6 +68,18 @@ async fn setup(
     validate_username(&req.username)?;
     validate_password(&req.password)?;
 
+    let already_setup: bool = state
+        .db
+        .run(|conn| {
+            let exists: i64 =
+                conn.query_row("SELECT EXISTS(SELECT 1 FROM users)", [], |r| r.get(0))?;
+            Ok(exists != 0)
+        })
+        .await?;
+    if already_setup {
+        return Err(AppError::Conflict("Kurulum zaten tamamlanmış."));
+    }
+
     let pw_hash = hash_password(req.password).await?;
     let token = new_session_token();
     let thash = token_hash(&token);
@@ -119,7 +131,11 @@ async fn login(
     State(state): State<AppState>,
     JsonBody(req): JsonBody<CredentialsReq>,
 ) -> Result<Response, AppError> {
-    if let Err(retry_after) = state.limiter.check(&req.username, addr.ip()) {
+    if req.username.len() > 32 || req.password.len() > 128 || req.password.chars().count() > 128 {
+        return Err(AppError::Unauthorized);
+    }
+
+    if let Err(retry_after) = state.limiter.reserve(&req.username, addr.ip()) {
         return Err(AppError::TooManyAttempts { retry_after });
     }
 
@@ -138,16 +154,15 @@ async fn login(
         .await?;
 
     let Some((user_id, db_username, pw_hash, is_admin)) = row else {
-        state.limiter.fail(&req.username, addr.ip());
+        let _ = verify_password(req.password, DUMMY_HASH.clone()).await;
         return Err(AppError::Unauthorized);
     };
 
     if !verify_password(req.password, pw_hash).await {
-        state.limiter.fail(&req.username, addr.ip());
         return Err(AppError::Unauthorized);
     }
 
-    state.limiter.ok(&req.username);
+    state.limiter.ok(&req.username, addr.ip());
 
     let token = new_session_token();
     let thash = token_hash(&token);
@@ -222,7 +237,7 @@ async fn change_password(
 ) -> Result<StatusCode, AppError> {
     validate_password(&req.new_password)?;
 
-    if let Err(retry_after) = state.limiter.check(&user.username, addr.ip()) {
+    if let Err(retry_after) = state.limiter.reserve(&user.username, addr.ip()) {
         return Err(AppError::TooManyAttempts { retry_after });
     }
 
@@ -240,11 +255,10 @@ async fn change_password(
         .await?;
 
     if !verify_password(req.current_password, pw_hash).await {
-        state.limiter.fail(&user.username, addr.ip());
         return Err(AppError::Unauthorized);
     }
 
-    state.limiter.ok(&user.username);
+    state.limiter.ok(&user.username, addr.ip());
 
     let new_hash = hash_password(req.new_password).await?;
     let current_thash = extract_session_token(&headers)

@@ -249,6 +249,54 @@ async fn status_rules() {
         .unwrap();
     assert_eq!(fin_date.as_deref(), Some("2026-10-02"));
 
+    // Calling PUT status -> finished when already finished preserves finished_date
+    let r_fin_again = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/api/books/{cbz_id}/status"))
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"status":"finished","local_date":"2026-10-15"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r_fin_again.status(), StatusCode::OK);
+
+    let fin_date_kept: Option<String> = dirs
+        .db
+        .run(move |conn| {
+            conn.query_row(
+                "SELECT finished_date FROM progress WHERE user_id = 1 AND book_id = ?1",
+                [cbz_id],
+                |r| r.get(0),
+            )
+            .map_err(Into::into)
+        })
+        .await
+        .unwrap();
+    assert_eq!(fin_date_kept.as_deref(), Some("2026-10-02"));
+
+    // Book and series endpoints return percent = 1.0 when status is finished
+    let book_fin_res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/books/{cbz_id}"))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let book_fin_json = body_json(book_fin_res).await;
+    assert_eq!(book_fin_json["status"], "finished");
+    assert_eq!(book_fin_json["percent"], 1.0);
+
     // Manual PUT status -> dropped (clears finished_date)
     let r4 = app
         .clone()
@@ -428,7 +476,7 @@ async fn history_only_own_rows() {
     let user_cookie = create_and_login_user(&app, &admin_cookie, "okur1").await;
     let (cbz_id, _) = setup_two_books(&dirs).await;
 
-    let _ = app
+    let ping_res = app
         .clone()
         .oneshot(
             Request::builder()
@@ -443,6 +491,7 @@ async fn history_only_own_rows() {
         )
         .await
         .unwrap();
+    assert_eq!(ping_res.status(), StatusCode::NO_CONTENT);
 
     let user_hist_res = app
         .clone()
@@ -531,7 +580,7 @@ async fn stats_other_user_isolated() {
     let user_cookie = create_and_login_user(&app, &admin_cookie, "izole_okur").await;
     let (cbz_id, _) = setup_two_books(&dirs).await;
 
-    let _ = app
+    let ping_res = app
         .clone()
         .oneshot(
             Request::builder()
@@ -546,6 +595,7 @@ async fn stats_other_user_isolated() {
         )
         .await
         .unwrap();
+    assert_eq!(ping_res.status(), StatusCode::NO_CONTENT);
 
     let res = app
         .clone()
@@ -589,7 +639,7 @@ async fn goal_roundtrip_and_done_count() {
     assert_eq!(goal_json["target"], 12);
 
     // Finish cbz_id in 2026 and epub_id in 2025
-    let _ = app
+    let st1_res = app
         .clone()
         .oneshot(
             Request::builder()
@@ -604,7 +654,8 @@ async fn goal_roundtrip_and_done_count() {
         )
         .await
         .unwrap();
-    let _ = app
+    assert_eq!(st1_res.status(), StatusCode::OK);
+    let st2_res = app
         .clone()
         .oneshot(
             Request::builder()
@@ -619,6 +670,7 @@ async fn goal_roundtrip_and_done_count() {
         )
         .await
         .unwrap();
+    assert_eq!(st2_res.status(), StatusCode::OK);
 
     let stats_res = app
         .clone()
@@ -683,4 +735,65 @@ async fn local_date_validation_400() {
             .unwrap();
         assert_eq!(r2.status(), StatusCode::BAD_REQUEST, "stats {bad_date}");
     }
+}
+
+#[tokio::test]
+async fn ping_client_id_book_mismatch_409() {
+    let (app, dirs) = test_app().await;
+    let cookie = login_as_admin(&app).await;
+    let (cbz_id, epub_id) = setup_two_books(&dirs).await;
+    let cid = "abcdef0123456789abcdef0123456789";
+
+    let res1 = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/reading/ping")
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(format!(
+                    r#"{{"client_id":"{cid}","book_id":{cbz_id},"active_seconds":30,"pages_read":3,"start_percent":0.0,"end_percent":0.5,"local_date":"2026-11-08"}}"#
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res1.status(), StatusCode::NO_CONTENT);
+
+    let res2 = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/reading/ping")
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(format!(
+                    r#"{{"client_id":"{cid}","book_id":{epub_id},"active_seconds":60,"pages_read":9,"start_percent":0.0,"end_percent":1.0,"local_date":"2026-11-08"}}"#
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res2.status(), StatusCode::CONFLICT);
+    let err_json = body_json(res2).await;
+    assert_eq!(err_json["error"], "conflict");
+
+    let hist_res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/history")
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let hist = body_json(hist_res).await;
+    assert_eq!(hist["total"], 1);
+    assert_eq!(hist["items"][0]["book_id"], cbz_id);
+    assert_eq!(hist["items"][0]["active_seconds"], 30);
+    assert_eq!(hist["items"][0]["pages_read"], 3);
 }

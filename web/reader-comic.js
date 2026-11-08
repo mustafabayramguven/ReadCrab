@@ -240,7 +240,15 @@
       }
     }
 
+    var isRar = book.format === 'rar' || book.format === 'cbr';
     function preloadNeighbors(idx) {
+      if (isRar) {
+        if (idx + 1 < total) {
+          var nextRarImg = new Image();
+          nextRarImg.src = '/api/books/' + book.id + '/pages/' + (idx + 1);
+        }
+        return;
+      }
       for (var f = 1; f <= 3; f++) {
         if (idx + f < total) {
           var nextImg = new Image();

@@ -1,6 +1,13 @@
-use std::{fs::File, io::Read, path::Path, process::Stdio, time::Duration};
+use std::{
+    fs::File,
+    io::Read,
+    path::{Path, PathBuf},
+    process::Stdio,
+    sync::{Arc, LazyLock, Mutex},
+    time::Duration,
+};
 
-use tokio::{io::AsyncReadExt, process::Command};
+use tokio::{io::AsyncReadExt, process::Command, sync::Semaphore};
 use zip::ZipArchive;
 
 use crate::formats::{
@@ -9,6 +16,11 @@ use crate::formats::{
 };
 
 const BSDTAR_TIMEOUT: Duration = Duration::from_secs(30);
+
+static BSDTAR_SEM: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(2));
+
+type PageListCache = Mutex<Option<(PathBuf, i64, Arc<Vec<String>>)>>;
+static PAGE_LIST_CACHE: LazyLock<PageListCache> = LazyLock::new(|| Mutex::new(None));
 
 pub fn glob_escape(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
@@ -27,6 +39,11 @@ pub async fn bsdtar_run(
     timeout_dur: Duration,
     max_output: u64,
 ) -> Result<Vec<u8>, FormatError> {
+    let _permit = BSDTAR_SEM
+        .acquire()
+        .await
+        .map_err(|_| FormatError::Corrupt)?;
+
     let mut child = Command::new(prog)
         .args(args)
         .env_clear()
@@ -143,13 +160,33 @@ pub async fn comic_pages(path: &Path, fmt: Format) -> Result<Vec<String>, Format
     }
 }
 
+pub async fn comic_pages_cached(
+    path: &Path,
+    fmt: Format,
+    mtime: i64,
+) -> Result<Arc<Vec<String>>, FormatError> {
+    if let Some((cached_path, cached_mtime, pages)) = PAGE_LIST_CACHE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+    {
+        if cached_path == path && *cached_mtime == mtime {
+            return Ok(pages.clone());
+        }
+    }
+    let pages = Arc::new(comic_pages(path, fmt).await?);
+    *PAGE_LIST_CACHE.lock().unwrap_or_else(|e| e.into_inner()) =
+        Some((path.to_path_buf(), mtime, pages.clone()));
+    Ok(pages)
+}
+
 pub async fn comic_read(
     path: &Path,
     fmt: Format,
     member: &str,
     max_entry: u64,
 ) -> Result<Vec<u8>, FormatError> {
-    // shortcut: her sayfa isteğinde arşiv baştan listelenir/açılır, büyük solid RAR'da yavaşlarsa liste önbelleği ekle
+    // shortcut: tek arşivlik sayfa listesi önbelleği ve 2 bsdtar izni; her sayfa okumasında arşiv yeniden açılır, büyük solid RAR'da yavaşlarsa açılmış sayfa önbelleği ekle
     match fmt {
         Format::Cbz | Format::Zip => {
             let p = path.to_path_buf();

@@ -25,6 +25,7 @@ Kitaplarınızı `./books` altına koyun; her seri için bir klasör oluşturun.
 ## Notlar
 
 - HTTPS arkasında çalıştırıyorsanız `COOKIE_SECURE=1` kullanın.
+- Ters vekil (reverse proxy, ör. Nginx) arkasında çalıştırıyorsanız `proxy_set_header Host $host;` ayarını ekleyin; aksi halde durum değiştiren istekler `Origin`/`Host` uyuşmazlığı nedeniyle `403 csrf` hatası alır.
 - Yönetici parolasını unutursanız kurtarma yolu yoktur; `DATA_DIR/kavita.db` silinerek sıfırdan kurulum yapılır.
 - MOBI desteği klasik MOBI içindir. KF8-only/AZW3 dosyaları desteklenmez.
 - EPUB'ın kendi CSS'i uygulanmaz; SVG içindeki kapak görselleri `<img>` olarak gösterilir.

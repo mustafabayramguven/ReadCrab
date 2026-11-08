@@ -242,6 +242,21 @@ async fn epub_asset_only_manifest_images() {
         "nosniff"
     );
 
+    let special_res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/books/{id}/asset?p=OEBPS%2Fimages%2Ffoto%20%2520%20%231.png"
+                ))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(special_res.status(), StatusCode::OK);
+
     for forbidden in [
         "OEBPS/images/unlisted.png",
         "OEBPS/secret.txt",

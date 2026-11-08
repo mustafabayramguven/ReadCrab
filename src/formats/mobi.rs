@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use axum::body::Bytes;
 use mobi::{headers::Encryption, Mobi};
 
 use crate::formats::FormatError;
@@ -8,7 +9,7 @@ use crate::formats::FormatError;
 pub struct MobiBook {
     pub title: String,
     pub chapters: Vec<String>,
-    pub images: Vec<Vec<u8>>,
+    pub images: Vec<Bytes>,
 }
 
 pub fn mobi_open(path: &Path) -> Result<MobiBook, FormatError> {
@@ -23,10 +24,10 @@ pub fn mobi_open(path: &Path) -> Result<MobiBook, FormatError> {
         return Err(FormatError::Corrupt);
     }
 
-    let images: Vec<Vec<u8>> = m
+    let images: Vec<Bytes> = m
         .image_records()
         .into_iter()
-        .map(|r| r.content.to_vec())
+        .map(|r| Bytes::from(r.content.to_vec()))
         .collect();
 
     let title = m.title().trim().trim_matches('\0').to_string();
@@ -51,8 +52,8 @@ fn split_mobi_chapters(raw: &str) -> Vec<String> {
                 if bytes[i..i + needle.len()].eq_ignore_ascii_case(needle) {
                     if let Some(end_rel) = rest[i..].find('>') {
                         found = Some((i, i + end_rel + 1));
-                        break;
                     }
+                    break;
                 }
             }
         }

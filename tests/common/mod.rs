@@ -4,7 +4,7 @@ use std::{
     fs::File,
     io::{Cursor, Write},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 use axum::{
@@ -103,6 +103,7 @@ pub fn make_epub(dir: &Path, name: &str, opts: EpubOpts) -> PathBuf {
     <item id="ch2" href="ch2.xhtml" media-type="application/xhtml+xml"/>
     <item id="ch3" href="ch3.xhtml" media-type="application/xhtml+xml"/>
     <item id="img1" href="images/pic.png" media-type="image/png"/>
+    <item id="img_special" href="images/foto%20%2520%20%231.png" media-type="image/png"/>
     <item id="cover" href="images/cover.png" media-type="image/png" properties="cover-image"/>
     <item id="secret" href="secret.txt" media-type="text/plain"/>
   </manifest>
@@ -117,11 +118,21 @@ pub fn make_epub(dir: &Path, name: &str, opts: EpubOpts) -> PathBuf {
     let nav = r#"<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
 <body>
+  <nav epub:type="landmarks">
+    <ol>
+      <li><a epub:type="bodymatter" href="ch1.xhtml">Kapak / Başlangıç</a></li>
+    </ol>
+  </nav>
   <nav epub:type="toc">
     <ol>
       <li><a href="ch1.xhtml">Bölüm Bir</a></li>
       <li><a href="ch2.xhtml">Bölüm İki</a></li>
       <li><a href="ch3.xhtml">Bölüm Üç</a></li>
+    </ol>
+  </nav>
+  <nav epub:type="page-list">
+    <ol>
+      <li><a href="ch1.xhtml">Sayfa 1</a></li>
     </ol>
   </nav>
 </body>
@@ -149,7 +160,8 @@ pub fn make_epub(dir: &Path, name: &str, opts: EpubOpts) -> PathBuf {
             ("OEBPS/ch1.xhtml", ch1.as_bytes().to_vec()),
             ("OEBPS/ch2.xhtml", ch2.as_bytes().to_vec()),
             ("OEBPS/ch3.xhtml", ch3.as_bytes().to_vec()),
-            ("OEBPS/images/pic.png", pic_png),
+            ("OEBPS/images/pic.png", pic_png.clone()),
+            ("OEBPS/images/foto %20 #1.png", pic_png),
             ("OEBPS/images/cover.png", cover_png),
             ("OEBPS/images/unlisted.png", unlisted_png),
             ("OEBPS/secret.txt", b"secret content".to_vec()),
@@ -388,6 +400,7 @@ pub async fn test_app_with_secure(cookie_secure: bool) -> (Router, TempDirs) {
         cfg: Arc::new(cfg),
         scan: Arc::new(ScanStatus::new()),
         limiter: Arc::new(LoginLimiter::new()),
+        mobi_cache: Arc::new(Mutex::new(None)),
     };
     let app = build_app(state.clone());
     (

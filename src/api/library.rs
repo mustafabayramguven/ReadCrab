@@ -1,4 +1,4 @@
-use std::sync::atomic::Ordering;
+use std::{collections::HashSet, sync::atomic::Ordering};
 
 use axum::{
     extract::{Path, Query, State},
@@ -10,7 +10,7 @@ use axum::{
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
-use crate::{app::AppState, auth::AuthUser, error::AppError};
+use crate::{app::AppState, auth::AuthUser, error::AppError, formats::natural::natural_cmp};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -65,15 +65,20 @@ struct SeriesListRes {
     items: Vec<SeriesListItem>,
 }
 
-fn like_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for ch in s.chars() {
-        if matches!(ch, '\\' | '%' | '_') {
-            out.push('\\');
-        }
-        out.push(ch);
-    }
-    out
+pub fn fold_tr(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            'İ' | 'I' | 'ı' => 'i',
+            _ => c,
+        })
+        .collect::<String>()
+        .to_lowercase()
+}
+
+struct SeriesRow {
+    item: SeriesListItem,
+    added_at: i64,
+    folded_name: String,
 }
 
 async fn list_series(
@@ -97,42 +102,35 @@ async fn list_series(
         return Err(AppError::BadRequest("Geçersiz durum süzgeci."));
     }
 
-    let order_clause = match sort.as_str() {
-        "added" => "s.added_at DESC, s.id DESC",
-        "recent" => {
-            "CASE WHEN last_read_at IS NULL THEN 1 ELSE 0 END ASC,
-             last_read_at DESC,
-             s.name COLLATE NOCASE ASC,
-             s.id ASC"
-        }
-        _ => "s.name COLLATE NOCASE ASC, s.id ASC",
-    };
-
-    let pattern = if q.is_empty() {
+    let q_folded = if q.is_empty() {
         None
     } else {
-        Some(format!("%{}%", like_escape(&q)))
+        Some(fold_tr(&q))
     };
 
     let user_id = user.id;
     let res = state
         .db
         .run(move |conn| {
-            let filter_sql = if pattern.is_some() {
-                "AND (
-                    s.name LIKE ?2 ESCAPE '\\'
-                    OR EXISTS (
-                        SELECT 1 FROM books b2
-                        WHERE b2.series_id = s.id
-                          AND b2.missing = 0
-                          AND b2.title LIKE ?2 ESCAPE '\\'
-                    )
-                )"
+            let matching_book_series: HashSet<i64> = if let Some(ref qf) = q_folded {
+                let mut bstmt =
+                    conn.prepare("SELECT series_id, title FROM books WHERE missing = 0")?;
+                let pairs = bstmt.query_map([], |r| {
+                    Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+                })?;
+                let mut set = HashSet::new();
+                for pair in pairs {
+                    let (sid, title) = pair?;
+                    if fold_tr(&title).contains(qf) {
+                        set.insert(sid);
+                    }
+                }
+                set
             } else {
-                ""
+                HashSet::new()
             };
 
-            let sql = format!(
+            let mut stmt = conn.prepare(
                 "SELECT
                     s.id,
                     s.name,
@@ -151,54 +149,91 @@ async fn list_series(
                         ORDER BY b3.sort_index ASC, b3.id ASC
                         LIMIT 1
                     ) AS cover_book_id,
-                    MAX(p.updated_at) AS last_read_at
+                    MAX(p.updated_at) AS last_read_at,
+                    s.added_at
                  FROM series s
                  JOIN books b ON b.series_id = s.id AND b.missing = 0
                  LEFT JOIN progress p ON p.book_id = b.id AND p.user_id = ?1
-                 WHERE 1 = 1 {filter_sql}
-                 GROUP BY s.id
-                 ORDER BY {order_clause}"
-            );
+                 GROUP BY s.id",
+            )?;
 
-            let mut stmt = conn.prepare(&sql)?;
-            let map_row = |r: &rusqlite::Row<'_>| -> rusqlite::Result<SeriesListItem> {
-                Ok(SeriesListItem {
-                    id: r.get(0)?,
-                    name: r.get(1)?,
-                    book_count: r.get(2)?,
-                    read_count: r.get(3)?,
-                    reading_count: r.get(4)?,
-                    percent: r.get::<_, Option<f64>>(5)?.unwrap_or(0.0),
-                    cover_book_id: r.get(6)?,
-                    last_read_at: r.get(7)?,
-                })
-            };
+            let rows = stmt
+                .query_map(rusqlite::params![user_id], |r| {
+                    let name: String = r.get(1)?;
+                    let folded_name = fold_tr(&name);
+                    Ok(SeriesRow {
+                        item: SeriesListItem {
+                            id: r.get(0)?,
+                            name,
+                            book_count: r.get(2)?,
+                            read_count: r.get(3)?,
+                            reading_count: r.get(4)?,
+                            percent: r.get::<_, Option<f64>>(5)?.unwrap_or(0.0),
+                            cover_book_id: r.get(6)?,
+                            last_read_at: r.get(7)?,
+                        },
+                        added_at: r.get(8)?,
+                        folded_name,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
 
-            let rows: Vec<SeriesListItem> = if let Some(ref pat) = pattern {
-                stmt.query_map(rusqlite::params![user_id, pat], map_row)?
-                    .collect::<rusqlite::Result<Vec<_>>>()?
-            } else {
-                stmt.query_map(rusqlite::params![user_id], map_row)?
-                    .collect::<rusqlite::Result<Vec<_>>>()?
-            };
-
-            let filtered: Vec<SeriesListItem> = rows
+            let mut filtered: Vec<SeriesRow> = rows
                 .into_iter()
-                .filter(|it| match status.as_str() {
-                    "reading" => {
-                        it.reading_count > 0 || (it.read_count > 0 && it.read_count < it.book_count)
+                .filter(|row| {
+                    if let Some(ref qf) = q_folded {
+                        if !row.folded_name.contains(qf)
+                            && !matching_book_series.contains(&row.item.id)
+                        {
+                            return false;
+                        }
                     }
-                    "finished" => it.read_count == it.book_count,
-                    "unread" => it.read_count == 0 && it.reading_count == 0,
-                    _ => true,
+                    let it = &row.item;
+                    match status.as_str() {
+                        "reading" => {
+                            it.reading_count > 0
+                                || (it.read_count > 0 && it.read_count < it.book_count)
+                        }
+                        "finished" => it.read_count == it.book_count,
+                        "unread" => it.read_count == 0 && it.reading_count == 0,
+                        _ => true,
+                    }
                 })
                 .collect();
+
+            match sort.as_str() {
+                "added" => {
+                    filtered.sort_by(|a, b| {
+                        b.added_at
+                            .cmp(&a.added_at)
+                            .then_with(|| b.item.id.cmp(&a.item.id))
+                    });
+                }
+                "recent" => {
+                    filtered.sort_by(|a, b| {
+                        a.item
+                            .last_read_at
+                            .is_none()
+                            .cmp(&b.item.last_read_at.is_none())
+                            .then_with(|| b.item.last_read_at.cmp(&a.item.last_read_at))
+                            .then_with(|| natural_cmp(&a.folded_name, &b.folded_name))
+                            .then_with(|| a.item.id.cmp(&b.item.id))
+                    });
+                }
+                _ => {
+                    filtered.sort_by(|a, b| {
+                        natural_cmp(&a.folded_name, &b.folded_name)
+                            .then_with(|| a.item.id.cmp(&b.item.id))
+                    });
+                }
+            }
 
             let total = filtered.len() as i64;
             let items = filtered
                 .into_iter()
                 .skip(offset as usize)
                 .take(limit as usize)
+                .map(|r| r.item)
                 .collect();
 
             Ok(SeriesListRes { total, items })
@@ -256,7 +291,7 @@ async fn get_series(
                     b.size,
                     b.error,
                     COALESCE(p.status, 'unread'),
-                    COALESCE(p.percent, 0.0)
+                    CASE WHEN p.status = 'finished' THEN 1.0 ELSE COALESCE(p.percent, 0.0) END
                  FROM books b
                  LEFT JOIN progress p ON p.book_id = b.id AND p.user_id = ?1
                  WHERE b.series_id = ?2 AND b.missing = 0
@@ -322,7 +357,7 @@ async fn get_book(
                         b.page_count,
                         b.error,
                         COALESCE(p.status, 'unread'),
-                        COALESCE(p.percent, 0.0),
+                        CASE WHEN p.status = 'finished' THEN 1.0 ELSE COALESCE(p.percent, 0.0) END,
                         COALESCE(p.locator, '')
                      FROM books b
                      JOIN series s ON s.id = b.series_id

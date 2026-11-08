@@ -56,7 +56,7 @@ pub async fn extract_cover(root: &Path, book: &BookRow, covers_dir: &Path) -> bo
             let p = full_path.clone();
             let Ok(Some(bytes)) = tokio::task::spawn_blocking(move || {
                 let m = mobi_open(&p).ok()?;
-                m.images.into_iter().next()
+                m.images.into_iter().next().map(Vec::from)
             })
             .await
             else {

@@ -104,7 +104,9 @@ async fn run_scan(state: &AppState) {
     let books_dir = state.cfg.books_dir.clone();
     let covers_dir = state.cfg.data_dir.join("covers");
 
-    let Ok(discovered) = tokio::task::spawn_blocking(move || walk_books(&books_dir)).await else {
+    let Ok((discovered, read_dir_errors)) =
+        tokio::task::spawn_blocking(move || walk_books(&books_dir)).await
+    else {
         return;
     };
 
@@ -113,23 +115,26 @@ async fn run_scan(state: &AppState) {
         .total
         .store(discovered.len() as u32, Ordering::SeqCst);
 
-    let seen_rel_paths: HashSet<String> = discovered.iter().map(|d| d.rel_path.clone()).collect();
-    let _ = state
-        .db
-        .run(move |conn| {
-            let mut stmt = conn.prepare("SELECT id, rel_path FROM books WHERE missing = 0")?;
-            let rows = stmt
-                .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            drop(stmt);
-            for (id, rel) in rows {
-                if !seen_rel_paths.contains(&rel) {
-                    conn.execute("UPDATE books SET missing = 1 WHERE id = ?1", [id])?;
+    if read_dir_errors == 0 {
+        let seen_rel_paths: HashSet<String> =
+            discovered.iter().map(|d| d.rel_path.clone()).collect();
+        let _ = state
+            .db
+            .run(move |conn| {
+                let mut stmt = conn.prepare("SELECT id, rel_path FROM books WHERE missing = 0")?;
+                let rows = stmt
+                    .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                drop(stmt);
+                for (id, rel) in rows {
+                    if !seen_rel_paths.contains(&rel) {
+                        conn.execute("UPDATE books SET missing = 1 WHERE id = ?1", [id])?;
+                    }
                 }
-            }
-            Ok(())
-        })
-        .await;
+                Ok(())
+            })
+            .await;
+    }
 
     for disc in discovered {
         process_single_book(state, &disc, &covers_dir).await;
@@ -202,14 +207,24 @@ async fn process_single_book(state: &AppState, disc: &DiscoveredFile, covers_dir
     }
 
     let path_for_hash = disc.full_path.clone();
-    let Ok(Ok(content_id)) =
-        tokio::task::spawn_blocking(move || compute_content_id(&path_for_hash)).await
-    else {
-        return;
-    };
+    let content_id =
+        match tokio::task::spawn_blocking(move || compute_content_id(&path_for_hash)).await {
+            Ok(Ok(cid)) => cid,
+            Ok(Err(e)) => {
+                tracing::warn!("içerik özeti hesaplanamadı ({:?}): {e}", disc.full_path);
+                return;
+            }
+            Err(e) => {
+                tracing::warn!("içerik özeti görevi başarısız ({:?}): {e}", disc.full_path);
+                return;
+            }
+        };
 
     let (title, page_count, err_str) =
         extract_metadata(&disc.full_path, disc.format, &disc.default_title).await;
+    if let Some(reason) = err_str {
+        tracing::warn!("kitap üstverisi okunamadı ({:?}): {reason}", disc.full_path);
+    }
 
     let rel_path = disc.rel_path.clone();
     let fmt_str = disc.format.as_str().to_string();
@@ -429,9 +444,10 @@ pub fn compute_content_id(path: &Path) -> std::io::Result<String> {
     Ok(hex)
 }
 
-fn walk_books(root: &Path) -> Vec<DiscoveredFile> {
+fn walk_books(root: &Path) -> (Vec<DiscoveredFile>, usize) {
     let mut raw = Vec::new();
-    walk_dir_rec(root, root, "", &mut raw);
+    let mut read_dir_errors = 0;
+    walk_dir_rec(root, root, "", &mut raw, &mut read_dir_errors);
 
     let mut by_series: HashMap<String, Vec<DiscoveredFile>> = HashMap::new();
     for item in raw {
@@ -454,18 +470,34 @@ fn walk_books(root: &Path) -> Vec<DiscoveredFile> {
             }
         }
     }
-    out
+    (out, read_dir_errors)
 }
 
-fn walk_dir_rec(root: &Path, dir: &Path, rel_dir: &str, out: &mut Vec<DiscoveredFile>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
+fn walk_dir_rec(
+    root: &Path,
+    dir: &Path,
+    rel_dir: &str,
+    out: &mut Vec<DiscoveredFile>,
+    read_dir_errors: &mut usize,
+) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(err) => {
+            tracing::error!("dizin okunamadı ({:?}): {err}", dir);
+            *read_dir_errors += 1;
+            return;
+        }
     };
 
     let mut subdirs = Vec::new();
     for entry_res in entries {
-        let Ok(entry) = entry_res else {
-            continue;
+        let entry = match entry_res {
+            Ok(e) => e,
+            Err(err) => {
+                tracing::error!("dizin girdisi okunamadı ({:?}): {err}", dir);
+                *read_dir_errors += 1;
+                continue;
+            }
         };
         let path = entry.path();
         let Ok(ft) = entry.file_type() else {
@@ -497,8 +529,12 @@ fn walk_dir_rec(root: &Path, dir: &Path, rel_dir: &str, out: &mut Vec<Discovered
             let Some(format) = Format::from_path(&path) else {
                 continue;
             };
-            let Ok(meta) = std::fs::metadata(&path) else {
-                continue;
+            let meta = match std::fs::metadata(&path) {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::warn!("dosya bilgisi okunamadı ({:?}): {e}", path);
+                    continue;
+                }
             };
             let size = meta.len() as i64;
             let mtime = meta
@@ -542,7 +578,7 @@ fn walk_dir_rec(root: &Path, dir: &Path, rel_dir: &str, out: &mut Vec<Discovered
 
     subdirs.sort_by(|a, b| natural_cmp(&a.0, &b.0));
     for (sub_rel, sub_path) in subdirs {
-        walk_dir_rec(root, &sub_path, &sub_rel, out);
+        walk_dir_rec(root, &sub_path, &sub_rel, out, read_dir_errors);
     }
 }
 

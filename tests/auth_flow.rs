@@ -237,6 +237,47 @@ async fn login_rate_limit() {
 }
 
 #[tokio::test]
+async fn login_rate_limit_burst() {
+    let (app, _dirs) = test_app().await;
+    let _cookie = login_as_admin(&app).await;
+
+    let mut handles = Vec::new();
+    for _ in 0..50 {
+        let router = app.clone();
+        handles.push(tokio::spawn(async move {
+            let res = router
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/login")
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(
+                            r#"{"username":"admin","password":"wrongpassword"}"#,
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            res.status()
+        }));
+    }
+
+    let mut count_401 = 0;
+    let mut count_429 = 0;
+    for h in handles {
+        match h.await.unwrap() {
+            StatusCode::UNAUTHORIZED => count_401 += 1,
+            StatusCode::TOO_MANY_REQUESTS => count_429 += 1,
+            other => panic!("beklenmeyen durum kodu: {other}"),
+        }
+    }
+
+    assert!(count_401 <= 5, "count_401: {count_401}");
+    assert_eq!(count_401 + count_429, 50);
+    assert!(count_429 >= 45, "count_429: {count_429}");
+}
+
+#[tokio::test]
 async fn csrf_origin_mismatch_403() {
     let (app, _dirs) = test_app().await;
     let res = app

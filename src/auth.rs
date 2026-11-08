@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     net::IpAddr,
-    sync::Mutex,
+    sync::{LazyLock, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -27,6 +27,15 @@ pub const SESSION_TTL_SECS: i64 = 30 * 86400;
 const WINDOW_SECS: u64 = 15 * 60;
 const USER_MAX_FAILS: usize = 5;
 const IP_MAX_FAILS: usize = 20;
+const MAX_BUCKETS: usize = 10_000;
+
+pub static DUMMY_HASH: LazyLock<String> = LazyLock::new(|| {
+    let salt = SaltString::generate(&mut OsRng);
+    Argon2::default()
+        .hash_password(b"dummy-password-for-timing", &salt)
+        .expect("dummy hash")
+        .to_string()
+});
 
 #[derive(Clone, Debug)]
 pub struct AuthUser {
@@ -174,6 +183,7 @@ impl FromRequestParts<AppState> for AdminUser {
 struct Bucket {
     failures: Vec<Instant>,
     locked_until: Option<Instant>,
+    last_seen: Option<Instant>,
 }
 
 impl Bucket {
@@ -184,6 +194,10 @@ impl Bucket {
             }
         }
         self.failures.retain(|&t| now.duration_since(t) < window);
+    }
+
+    fn is_expired(&self) -> bool {
+        self.locked_until.is_none() && self.failures.is_empty()
     }
 
     fn remaining_lock(&self, now: Instant) -> Option<u64> {
@@ -199,6 +213,7 @@ impl Bucket {
     fn record_failure(&mut self, now: Instant, window: Duration, limit: usize) {
         self.prune(now, window);
         self.failures.push(now);
+        self.last_seen = Some(now);
         if self.failures.len() >= limit {
             self.locked_until = Some(now + window);
         }
@@ -215,7 +230,26 @@ impl LoginLimiter {
         Self::default()
     }
 
-    pub fn check(&self, user: &str, ip: IpAddr) -> Result<(), u64> {
+    fn enforce_cap(map: &mut HashMap<String, Bucket>, now: Instant, window: Duration) {
+        if map.len() <= MAX_BUCKETS {
+            return;
+        }
+        map.retain(|_, b| {
+            b.prune(now, window);
+            !b.is_expired()
+        });
+        if map.len() > MAX_BUCKETS {
+            let remove_count = map.len() - MAX_BUCKETS;
+            let mut order: Vec<(String, Option<Instant>)> =
+                map.iter().map(|(k, b)| (k.clone(), b.last_seen)).collect();
+            order.sort_by_key(|(_, ts)| *ts);
+            for (k, _) in order.into_iter().take(remove_count) {
+                map.remove(&k);
+            }
+        }
+    }
+
+    pub fn reserve(&self, user: &str, ip: IpAddr) -> Result<(), u64> {
         let now = Instant::now();
         let window = Duration::from_secs(WINDOW_SECS);
         let ukey = format!("u:{}", user.to_ascii_lowercase());
@@ -237,31 +271,34 @@ impl LoginLimiter {
             }
         }
 
-        match retry {
-            Some(secs) => Err(secs),
-            None => Ok(()),
+        if let Some(secs) = retry {
+            return Err(secs);
         }
-    }
 
-    pub fn fail(&self, user: &str, ip: IpAddr) {
-        let now = Instant::now();
-        let window = Duration::from_secs(WINDOW_SECS);
-        let ukey = format!("u:{}", user.to_ascii_lowercase());
-        let ikey = format!("ip:{ip}");
-
-        let mut map = self.buckets.lock().unwrap_or_else(|e| e.into_inner());
         map.entry(ukey)
             .or_default()
             .record_failure(now, window, USER_MAX_FAILS);
         map.entry(ikey)
             .or_default()
             .record_failure(now, window, IP_MAX_FAILS);
+        Self::enforce_cap(&mut map, now, window);
+        Ok(())
     }
 
-    pub fn ok(&self, user: &str) {
+    pub fn ok(&self, user: &str, ip: IpAddr) {
         let ukey = format!("u:{}", user.to_ascii_lowercase());
+        let ikey = format!("ip:{ip}");
         let mut map = self.buckets.lock().unwrap_or_else(|e| e.into_inner());
         map.remove(&ukey);
+        if let Some(b) = map.get_mut(&ikey) {
+            b.failures.pop();
+            if b.failures.len() < IP_MAX_FAILS {
+                b.locked_until = None;
+            }
+            if b.is_expired() {
+                map.remove(&ikey);
+            }
+        }
     }
 }
 
@@ -332,4 +369,22 @@ pub fn validate_password(password: &str) -> Result<(), AppError> {
         return Err(AppError::BadRequest("Parola 8-128 karakter olmalıdır."));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::Ipv4Addr;
+
+    use super::*;
+
+    #[test]
+    fn limiter_memory_cap_prunes_and_evicts() {
+        let limiter = LoginLimiter::new();
+        for i in 0..5_005u32 {
+            let ip = IpAddr::V4(Ipv4Addr::from(i + 1));
+            let _ = limiter.reserve(&format!("user_{i}"), ip);
+        }
+        let len = limiter.buckets.lock().unwrap().len();
+        assert!(len <= MAX_BUCKETS, "len: {len}");
+    }
 }
