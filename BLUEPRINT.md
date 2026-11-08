@@ -1377,3 +1377,4 @@ Atlananlar/riskler: Hiçbir CSS, JS veya renk formülü çalıştırılmadı. Pa
 - İşçi 2'nin görev 1-5 sapmaları kabul edildi: `version = "0.1.0"`, `smoke.sh` chmod adımları, `image` işinde `test -f Cargo.lock`, `cache-to: type=gha`.
 - Çalışır durumda olana kadar `image`/`e2e` kırmızısı beklenen durumdur; `test` işi her görev sonunda yeşil olmalıdır.
 - Force push yasaktır. Düzeltmeler yeni commit'lerle yapılır.
+- `<meta name="theme-color" content="#FEF7FF">` kullanılır (ilk değer; `theme.js` çalışınca `surface` ile değişir). `<div id="app" class="app-shell"></div>` görev 15 başında `web/index.html`'e eklenir; `theme-color` ve `<noscript>` görev 20a'da.
