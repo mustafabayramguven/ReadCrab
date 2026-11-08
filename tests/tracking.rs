@@ -454,6 +454,23 @@ async fn ping_zero_creates_nothing() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
 
+    let res2 = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/reading/ping")
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(format!(
+                    r#"{{"client_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","book_id":{cbz_id},"active_seconds":0,"pages_read":1,"start_percent":0.0,"end_percent":0.5,"local_date":"2026-11-08"}}"#
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res2.status(), StatusCode::NO_CONTENT);
+
     let hist_res = app
         .clone()
         .oneshot(

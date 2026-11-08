@@ -382,7 +382,7 @@ async fn reading_ping(
                     rusqlite::params![new_active, new_pages, req.end_percent, now, row_id],
                 )?;
             } else {
-                if req.active_seconds == 0 && req.pages_read == 0 {
+                if req.active_seconds == 0 {
                     return Ok(());
                 }
                 let started_at = (now - req.active_seconds).max(0);
