@@ -1,0 +1,3 @@
+Material Symbols, Google, Apache License 2.0, https://github.com/google/material-design-icons, paket `@material-symbols/svg-400@0.48.3` (outlined).
+Kaynak: https://cdn.jsdelivr.net/npm/@material-symbols/svg-400@0.48.3/outlined/
+Lisans: Apache-2.0, https://www.apache.org/licenses/LICENSE-2.0
