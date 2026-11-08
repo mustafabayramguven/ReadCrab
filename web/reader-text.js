@@ -275,7 +275,7 @@
       'button',
       {
         type: 'button',
-        className: 'icon-btn',
+        className: 'icon-btn type-label-large',
         'aria-label': 'Yazıyı küçült (A-)',
         text: 'A-',
         onClick: function () {
@@ -287,7 +287,7 @@
       'button',
       {
         type: 'button',
-        className: 'icon-btn',
+        className: 'icon-btn type-label-large',
         'aria-label': 'Yazıyı büyüt (A+)',
         text: 'A+',
         onClick: function () {
@@ -327,7 +327,7 @@
             className: 'type-body-large',
             text: 'Yazı boyutu'
           }),
-          el('div', { className: 'setting-row' }, [
+          el('div', { className: 'setting-row slider-row' }, [
             fsMinusBtn,
             fsSlider,
             fsPlusBtn

@@ -694,9 +694,14 @@ body.reading main.page {
   border: none;
   background: transparent;
   color: var(--md-sys-color-on-surface-variant);
+  font-family: inherit;
   cursor: pointer;
   padding: 0;
   flex: none;
+}
+
+.icon-btn.type-label-large {
+  color: var(--md-sys-color-on-surface);
 }
 
 .fab {
@@ -1392,6 +1397,8 @@ dialog.sheet[open] {
 .slider {
   -webkit-appearance: none;
   appearance: none;
+  flex: 1;
+  min-width: 0;
   width: 100%;
   height: 4px;
   border-radius: var(--md-sys-shape-corner-full);
@@ -1621,6 +1628,11 @@ dialog.sheet[open] {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.slider-row {
+  flex-wrap: nowrap;
+  align-items: center;
 }
 
 /* Okuyucu (15.7) */
