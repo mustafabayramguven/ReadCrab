@@ -6,5 +6,6 @@ pub mod db;
 pub mod error;
 pub mod formats;
 pub mod safepath;
+pub mod scan;
 
 pub use app::build_app;

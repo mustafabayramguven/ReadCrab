@@ -15,6 +15,7 @@ use crate::{
     config::Config,
     db::Db,
     error::AppError,
+    scan::ScanStatus,
 };
 
 pub const APP_CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'self'";
@@ -37,6 +38,7 @@ const FONT_LATIN_EXT: &[u8] = include_bytes!("../web/fonts/roboto-flex-latin-ext
 pub struct AppState {
     pub db: Db,
     pub cfg: Arc<Config>,
+    pub scan: Arc<ScanStatus>,
     pub limiter: Arc<LoginLimiter>,
 }
 

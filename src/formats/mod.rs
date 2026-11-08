@@ -3,6 +3,7 @@ use std::path::Path;
 use crate::error::AppError;
 
 pub mod comic;
+pub mod cover;
 pub mod epub;
 pub mod mobi;
 pub mod natural;

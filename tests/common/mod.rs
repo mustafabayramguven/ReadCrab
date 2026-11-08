@@ -19,6 +19,7 @@ use kavita_rs::{
     auth::LoginLimiter,
     config::Config,
     db::Db,
+    scan::ScanStatus,
 };
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -385,6 +386,7 @@ pub async fn test_app_with_secure(cookie_secure: bool) -> (Router, TempDirs) {
     let state = AppState {
         db: db.clone(),
         cfg: Arc::new(cfg),
+        scan: Arc::new(ScanStatus::new()),
         limiter: Arc::new(LoginLimiter::new()),
     };
     let app = build_app(state.clone());

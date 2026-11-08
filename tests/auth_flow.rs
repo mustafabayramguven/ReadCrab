@@ -317,6 +317,7 @@ async fn non_admin_gets_403_on_admin_routes() {
             "/api/admin/users/1/password",
             r#"{"password":"newpassword123"}"#,
         ),
+        ("POST", "/api/admin/scan", "{}"),
     ];
 
     for (method, uri, body_str) in routes {

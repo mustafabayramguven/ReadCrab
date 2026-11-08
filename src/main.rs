@@ -7,9 +7,10 @@ use std::{
 
 use kavita_rs::{
     app::{build_app, AppState},
-    auth::LoginLimiter,
+    auth::{unix_now, LoginLimiter},
     config::Config,
     db::Db,
+    scan::{start_scan, ScanStatus},
 };
 
 fn run_healthcheck(port: u16) -> ! {
@@ -71,8 +72,27 @@ async fn main() {
     let state = AppState {
         db,
         cfg: Arc::new(cfg),
+        scan: Arc::new(ScanStatus::new()),
         limiter: Arc::new(LoginLimiter::new()),
     };
+
+    let cleanup_db = state.db.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(3600));
+        loop {
+            interval.tick().await;
+            let now = unix_now();
+            let _ = cleanup_db
+                .run(move |conn| {
+                    conn.execute("DELETE FROM sessions WHERE expires_at <= ?1", [now])?;
+                    Ok(())
+                })
+                .await;
+        }
+    });
+
+    start_scan(state.clone());
+
     let app = build_app(state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));

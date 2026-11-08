@@ -2,7 +2,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{delete, get, put},
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use rusqlite::OptionalExtension;
@@ -12,6 +12,7 @@ use crate::{
     app::AppState,
     auth::{hash_password, unix_now, validate_password, validate_username, AdminUser},
     error::{AppError, JsonBody},
+    scan::start_scan,
 };
 
 pub fn router() -> Router<AppState> {
@@ -19,6 +20,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/admin/users", get(list_users).post(create_user))
         .route("/api/admin/users/{id}", delete(delete_user))
         .route("/api/admin/users/{id}/password", put(reset_password))
+        .route("/api/admin/scan", post(trigger_scan))
 }
 
 #[derive(Serialize)]
@@ -176,4 +178,18 @@ async fn reset_password(
         .await?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn trigger_scan(
+    _admin: AdminUser,
+    State(state): State<AppState>,
+) -> Result<Response, AppError> {
+    if !start_scan(state) {
+        return Err(AppError::Conflict("Tarama zaten çalışıyor."));
+    }
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({ "started": true })),
+    )
+        .into_response())
 }
