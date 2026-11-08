@@ -41,7 +41,11 @@ async fn static_files_have_expected_types() {
     for &(name, ct) in expected {
         let res = get(&app, &format!("/static/{name}")).await;
         assert_eq!(res.status(), StatusCode::OK, "{name}");
-        assert_eq!(res.headers()[header::CONTENT_TYPE].to_str().unwrap(), ct, "{name}");
+        assert_eq!(
+            res.headers()[header::CONTENT_TYPE].to_str().unwrap(),
+            ct,
+            "{name}"
+        );
         let bytes = body_bytes(res).await;
         if name.ends_with(".woff2") {
             assert_eq!(&bytes[..4], &b"wOF2"[..], "{name}");
@@ -71,7 +75,13 @@ async fn index_html_script_and_style_rules() {
 
     // theme.js, diğer tüm betiklerden önce gelmeli
     let theme = html.find("/static/theme.js").expect("theme.js yok");
-    for other in ["tracker.js", "reader-comic.js", "reader-text.js", "stats.js", "app.js"] {
+    for other in [
+        "tracker.js",
+        "reader-comic.js",
+        "reader-text.js",
+        "stats.js",
+        "app.js",
+    ] {
         let pos = html.find(&format!("/static/{other}")).expect(other);
         assert!(theme < pos, "theme.js, {other} betiğinden önce olmalı");
     }
@@ -83,13 +93,19 @@ async fn index_html_script_and_style_rules() {
         let after = &rest[i..];
         let end = after.find('>').expect("kapanmamış <script");
         let tag = &after[..=end];
-        assert!(tag.contains(" src=\"/static/"), "satır içi veya harici olmayan betik: {tag}");
+        assert!(
+            tag.contains(" src=\"/static/"),
+            "satır içi veya harici olmayan betik: {tag}"
+        );
         assert!(!tag.contains("defer") && !tag.contains("async"), "{tag}");
         count += 1;
         rest = &after[end + 1..];
     }
     assert_eq!(count, 6);
 
-    assert!(!html.contains("http://") && !html.contains("https://"), "CDN bağlantısı var");
+    assert!(
+        !html.contains("http://") && !html.contains("https://"),
+        "CDN bağlantısı var"
+    );
     assert!(!html.contains("style="), "style= özniteliği var");
 }
