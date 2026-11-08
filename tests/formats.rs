@@ -233,7 +233,7 @@ fn epub_sanitizes_xss() {
     assert!(!clean.contains("evil.example"));
     assert!(!clean.contains("etc/passwd"));
     assert!(clean.contains("/api/books/42/asset?p=OEBPS%2Fimages%2Fpic%2Epng"));
-    assert!(clean.contains(r#"href="#""#));
+    assert!(clean.contains("href=\"#\""));
     assert!(clean.contains(r#"href="https://example.com/safe""#));
     assert!(clean.contains("Temiz içerik"));
 
