@@ -29,7 +29,12 @@ Kitaplarınızı `./books` altına koyun; her seri için bir klasör oluşturun.
 - MOBI desteği klasik MOBI içindir. KF8-only/AZW3 dosyaları desteklenmez.
 - EPUB'ın kendi CSS'i uygulanmaz; SVG içindeki kapak görselleri `<img>` olarak gösterilir.
 - RAR/CBR okuma `bsdtar` ile yapılır.
+- Tema modu (Otomatik, Açık, Koyu) ve kaynak renk, Hesap sayfasından (`#/hesap`) seçilir. Seçim tarayıcıda saklanır.
+- Hesap sayfasında parolanızı da değiştirebilirsiniz; diğer oturumlarınız kapanır.
 
-## Lisans
+## Lisans ve üçüncü taraf varlıkları
 
-GPL-3.0. Tam metin `LICENSE` dosyasındadır.
+- Uygulama kodu: GPL-3.0. Tam metin `LICENSE` dosyasındadır.
+- Yazı tipi: Roboto Flex, SIL Open Font License 1.1 (`web/fonts/LICENSE`).
+- İkonlar: Material Symbols, Apache License 2.0 (`web/ICONS-LICENSE.txt`).
+- CI'nin e2e işi uygulamanın ekran görüntülerini `ui-screenshots` artifact'ı olarak saklar.
