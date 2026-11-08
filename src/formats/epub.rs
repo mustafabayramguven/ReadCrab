@@ -241,8 +241,10 @@ fn local_name(raw: &[u8]) -> &[u8] {
 fn attr_value(e: &quick_xml::events::BytesStart<'_>, key_local: &[u8]) -> Option<String> {
     for attr in e.attributes().flatten() {
         if local_name(attr.key.as_ref()).eq_ignore_ascii_case(key_local) {
-            if let Ok(val) = attr.decode_and_unescape_value_with(|_| Some("")) {
-                return Some(val.into_owned());
+            if let Ok(raw) = std::str::from_utf8(attr.value.as_ref()) {
+                if let Ok(val) = quick_xml::escape::unescape_with(raw, |_| Some("")) {
+                    return Some(val.into_owned());
+                }
             }
         }
     }
@@ -320,7 +322,8 @@ fn parse_opf_xml(xml: &str, opf_dir: &str) -> Result<ParsedOpf, FormatError> {
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => {
-                let lname = local_name(e.name().as_ref());
+                let qname = e.name();
+                let lname = local_name(qname.as_ref());
                 if lname.eq_ignore_ascii_case(b"title") && title.is_none() {
                     in_title = true;
                     title_buf.clear();
@@ -339,16 +342,15 @@ fn parse_opf_xml(xml: &str, opf_dir: &str) -> Result<ParsedOpf, FormatError> {
                 }
             }
             Ok(Event::Empty(ref e)) => {
-                let lname = local_name(e.name().as_ref());
+                let qname = e.name();
+                let lname = local_name(qname.as_ref());
                 if lname.eq_ignore_ascii_case(b"meta") {
                     if attr_value(e, b"name").as_deref() == Some("cover") {
                         meta_cover_id = attr_value(e, b"content");
                     }
                 } else if lname.eq_ignore_ascii_case(b"item") {
                     record_manifest_item(e, opf_dir, &mut manifest);
-                } else if lname.eq_ignore_ascii_case(b" itemref")
-                    || lname.eq_ignore_ascii_case(b"itemref")
-                {
+                } else if lname.eq_ignore_ascii_case(b"itemref") {
                     if let Some(idref) = attr_value(e, b"idref") {
                         spine_ids.push(idref);
                     }
@@ -509,7 +511,8 @@ fn parse_ncx_toc(xml: &str, ncx_dir: &str, spine: &[String]) -> Vec<(String, usi
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => {
-                let lname = local_name(e.name().as_ref());
+                let qname = e.name();
+                let lname = local_name(qname.as_ref());
                 if lname.eq_ignore_ascii_case(b"text") {
                     in_text = true;
                     last_label.clear();
