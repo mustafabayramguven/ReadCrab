@@ -88,7 +88,8 @@ async fn rar_via_bsdtar_lists_and_reads() {
 
 #[tokio::test]
 async fn rar_timeout_kills_process() {
-    let fut = bsdtar_run("sleep", &["5"], Duration::from_millis(200), MAX_ENTRY_BYTES);
+    let dur = Duration::from_millis(200);
+    let fut = bsdtar_run("sleep", &["5"], dur, MAX_ENTRY_BYTES);
     let res = fut.await;
     assert!(matches!(res, Err(FormatError::Timeout)));
 }

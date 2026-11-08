@@ -73,7 +73,13 @@ pub async fn bsdtar_run(
 
 pub async fn bsdtar_list(path: &Path) -> Result<Vec<String>, FormatError> {
     let path_str = path.to_str().ok_or(FormatError::Corrupt)?;
-    let raw = bsdtar_run("bsdtar", &["-tf", path_str], BSDTAR_TIMEOUT, MAX_ENTRY_BYTES).await?;
+    let raw = bsdtar_run(
+        "bsdtar",
+        &["-tf", path_str],
+        BSDTAR_TIMEOUT,
+        MAX_ENTRY_BYTES,
+    )
+    .await?;
     let text = String::from_utf8(raw).map_err(|_| FormatError::Corrupt)?;
 
     let mut items = Vec::new();
