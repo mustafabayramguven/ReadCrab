@@ -375,7 +375,7 @@ async fn get_book_cover(
     }
 
     let cover_path = state.cfg.data_dir.join("covers").join(format!("{id}.jpg"));
-    let Ok(bytes) = tokio::fs::read(&cover_path).await else {
+    let Ok(Ok(bytes)) = tokio::task::spawn_blocking(move || std::fs::read(cover_path)).await else {
         return Err(AppError::NotFound);
     };
 
