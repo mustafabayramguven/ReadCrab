@@ -64,8 +64,10 @@ struct BookMeta {
     mtime: i64,
 }
 
+type BookRow = (String, String, String, i64, Option<String>, i64, i64);
+
 async fn load_book_meta(state: &AppState, id: i64) -> Result<BookMeta, AppError> {
-    let row: Option<(String, String, String, i64, Option<String>, i64, i64)> = state
+    let row: Option<BookRow> = state
         .db
         .run(move |conn| {
             conn.query_row(
