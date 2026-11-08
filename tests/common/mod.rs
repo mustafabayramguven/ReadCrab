@@ -1,6 +1,11 @@
 #![allow(dead_code)]
 
-use std::{io::Cursor, sync::Arc};
+use std::{
+    fs::File,
+    io::{Cursor, Write},
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use axum::{
     body::Body,
@@ -17,6 +22,7 @@ use kavita_rs::{
 };
 use tempfile::TempDir;
 use tower::ServiceExt;
+use zip::{write::SimpleFileOptions, ZipWriter};
 
 pub struct TempDirs {
     pub data_dir: TempDir,
@@ -31,6 +37,42 @@ pub fn png(w: u32, h: u32, rgb: [u8; 3]) -> Vec<u8> {
     img.write_to(&mut Cursor::new(&mut buf), ImageFormat::Png)
         .unwrap();
     buf
+}
+
+pub fn make_cbz(dir: &Path, name: &str, pages: &[(&str, Vec<u8>)]) -> PathBuf {
+    let path = dir.join(name);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
+    let file = File::create(&path).unwrap();
+    let mut zip = ZipWriter::new(file);
+    let opts = SimpleFileOptions::default();
+    for (entry_name, data) in pages {
+        zip.start_file(*entry_name, opts).unwrap();
+        zip.write_all(data).unwrap();
+    }
+    zip.finish().unwrap();
+    path
+}
+
+pub fn make_tar_as_cbr(dir: &Path, name: &str, files: &[(&str, Vec<u8>)]) -> PathBuf {
+    let path = dir.join(name);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
+    let file = File::create(&path).unwrap();
+    let mut builder = tar::Builder::new(file);
+    for (entry_name, data) in files {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(data.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, *entry_name, &data[..])
+            .unwrap();
+    }
+    builder.finish().unwrap();
+    path
 }
 
 pub async fn test_app_with_secure(cookie_secure: bool) -> (Router, TempDirs) {
