@@ -5,10 +5,12 @@ use crate::app::AppState;
 pub mod admin;
 pub mod auth;
 pub mod library;
+pub mod reader;
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .merge(auth::router())
         .merge(admin::router())
         .merge(library::router())
+        .merge(reader::router())
 }
