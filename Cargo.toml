@@ -1,0 +1,37 @@
+[package]
+name = "kavita-rs"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+license = "GPL-3.0-only"
+resolver = "3"
+
+[[bin]]
+name = "kavita-rs"
+
+[dependencies]
+axum            = { version = "=0.8.4", default-features = false, features = ["http1","json","query","tokio","macros"] }
+tokio           = { version = "=1.47.1", features = ["rt-multi-thread","macros","process","time","net","io-util","signal","sync"] }
+tower-http      = { version = "=0.6.6", default-features = false, features = ["catch-panic"] }
+rusqlite        = { version = "=0.37.0", features = ["bundled"] }
+argon2          = "=0.5.3"
+rand            = "=0.8.5"
+sha2            = "=0.10.9"
+hex             = "=0.4.3"
+base64          = "=0.22.1"
+serde           = { version = "=1.0.219", features = ["derive"] }
+serde_json      = "=1.0.143"
+zip             = { version = "=2.4.2", default-features = false, features = ["deflate"] }
+quick-xml       = "=0.37.5"
+image           = { version = "=0.25.8", default-features = false, features = ["jpeg","png","gif","webp"] }
+mobi            = "=0.8.0"
+ammonia         = "=4.1.2"
+percent-encoding= "=2.3.2"
+tracing         = "=0.1.41"
+tracing-subscriber = { version = "=0.3.20", features = ["env-filter"] }
+
+[dev-dependencies]
+tower           = { version = "=0.5.2", features = ["util"] }
+http-body-util  = "=0.1.3"
+tempfile        = "=3.22.0"
+tar             = "=0.4.44"

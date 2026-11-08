@@ -1,0 +1,10 @@
+services:
+  kavita-rs:
+    image: ghcr.io/mustafabayramguven/kavita-rs:latest
+    ports: ["3435:3435"]
+    volumes:
+      - ./books:/books:ro
+      - kavita-data:/data
+    restart: unless-stopped
+volumes:
+  kavita-data:
