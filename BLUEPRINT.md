@@ -1378,3 +1378,62 @@ Atlananlar/riskler: Hiçbir CSS, JS veya renk formülü çalıştırılmadı. Pa
 - Çalışır durumda olana kadar `image`/`e2e` kırmızısı beklenen durumdur; `test` işi her görev sonunda yeşil olmalıdır.
 - Force push yasaktır. Düzeltmeler yeni commit'lerle yapılır.
 - `<meta name="theme-color" content="#FEF7FF">` kullanılır (ilk değer; `theme.js` çalışınca `surface` ile değişir). `<div id="app" class="app-shell"></div>` görev 15 başında `web/index.html`'e eklenir; `theme-color` ve `<noscript>` görev 20a'da.
+
+---
+
+## 16. CEO düzeltme turu 1 (önceki bölümlerle çelişirse bu bölüm kazanır)
+
+Kaynak: şeytanın avukatı raporu + CEO'nun ekran görüntüsü incelemesi. Her madde tamamlanır; yapılamayan madde `BLOKE:` ile raporlanır. Testler silinmez, zayıflatılmaz.
+
+### 16.1 Arka uç: güvenlik
+1. **Giriş sınırlayıcı yarışı (`src/auth.rs`, `src/api/auth.rs` login ve change_password).** `check` yerine atomik `reserve(user, ip) -> Result<(), u64>`: tek kilit altında sınırı denetler ve denemeyi HEMEN sayar. Başarıda `ok(user)` kullanıcı kovasını sıfırlar; IP kovasından o rezervasyonu düşer. Başarısızlıkta başka artış olmaz. Test: `login_rate_limit_burst`: aynı adla 50 eşzamanlı yanlış giriş; en çok 5 tanesi 401, kalanı 429.
+2. **Setup DoS (`src/api/auth.rs` setup).** Argon2'den önce `SELECT EXISTS(SELECT 1 FROM users)`; doluysa hemen 409. Yarış koruması için mevcut koşullu INSERT kalır. Test: kurulu sistemde setup 409 (mevcut test yeterli değilse genişlet).
+3. **Sınırlayıcı belleği.** Login'de `username` uzunluğu 32'yi veya `password` 128'i aşarsa kova açmadan 401. `fail/reserve` içinde harita 10.000 anahtarı aşarsa süresi dolanlar budanır; hâlâ aşıyorsa en eskiler atılır. Birim test.
+4. **Kullanıcı adı zamanlaması.** Kullanıcı yoksa sabit bir sahte argon2id hash'e (`std::sync::LazyLock`, ilk kullanımda üretilir) karşı `verify_password` çalışır, sonuç yok sayılır.
+5. **Ping (`src/api/tracking.rs`).** Mevcut satırın `book_id`'si istektekinden farklıysa 409 `conflict`, satır değişmez. Test: `ping_client_id_book_mismatch_409`.
+
+### 16.2 Arka uç: veri ve biçimler
+6. **Tarama hataları (`src/scan.rs`).** Yürüyüş `read_dir` hatalarını sayar ve `tracing::error!` yazar. Kök dizin okunamıyorsa VEYA herhangi bir `read_dir` hatası olduysa o taramada `missing=1` işaretleme adımı ATLANIR. Dosya başına `compute_content_id`/meta hataları `tracing::warn!` ile yazılır. Test: `scan_unreadable_root_keeps_books`: önce tara, sonra kökü `chmod 000` yap (root değilse) ve tara, kitaplar `missing=0` kalır.
+7. **Türkçe arama ve sıralama (`src/api/library.rs`).** `fn fold_tr(s:&str)->String`: `İ I ı` → `i`, ardından `to_lowercase`. `q` filtresi ve `sort=name` Rust'ta bu katlanmış metin üzerinden yapılır (`natural_cmp` ile); SQL LIKE/NOCASE bunlar için kullanılmaz. `sort=name` doğal sıralamalıdır (`Cilt 2` < `Cilt 10`), blueprint 5.3'teki "doğal değil" ifadesi iptal. Test: `search_and_sort_turkish`: `şeker`↔`ŞEKER`, `ırmak`↔`IRMAK`, `İstanbul`↔`istanbul`.
+8. **Nav TOC (`src/formats/epub.rs`).** Yalnız `<nav epub:type="toc">` içindeki bağlantılar alınır; böyle bir nav yoksa ilk `<nav>` kullanılır. `landmarks` ve `page-list` alınmaz. Test: fixture'a landmarks ekleyip TOC'ta olmadığını doğrula.
+9. **EPUB asset çift çözme (`epub_asset`, `normalize_zip_path`).** Yüzde çözme tek katmanda olur: `Query` çözülmüş değeri manifest yoluyla doğrudan karşılaştırılır; `epub_asset` ikinci kez çözmez. `p.contains("..")` kaldırılır; manifest anahtar eşleşmesi tek yetkilidir. Test: `foto %20 #1.png` benzeri adlı manifest görseli 200; `../` ve `%2e%2e/` hâlâ 404.
+10. **MOBI önbelleği (`src/api/reader.rs`, `AppState`).** Tek girdilik `Mutex<Option<(PathBuf, i64 mtime, Arc<MobiBook>)>>`; `get_toc/get_chapter/get_asset` paylaşır. `images` kopyalanmaz. Yorum: `// shortcut: tek kitaplık önbellek, iki kullanıcı dönüşümlü farklı MOBI okursa yeniden çözülür, gerekirse LRU`. `split_mobi_chapters`: `<mbp:pagebreak` sonrası `>` bulunmazsa döngü biter (O(n²) yok).
+11. **RAR yükü (`src/formats/comic.rs`, `src/api/reader.rs`).** Tek girdilik sayfa listesi önbelleği (yol+mtime → `Arc<Vec<String>>`) ve `bsdtar` için `tokio::sync::Semaphore` (2 izin). `reader-comic.js`: `rar`/`cbr` için ön yükleme yalnız sonraki 1 sayfa. Önceki shortcut yorumu buna göre güncellenir.
+12. **`PUT status` (`put_status`).** Önceki durum zaten `finished` ise `finished_date` korunur. `getSeries`/kitap yanıtında `status='finished'` için gösterilen `percent` 1'dir.
+13. **`/data` hatası (`main.rs`).** `create_dir_all`/`Db::open` başarısızsa panik yok: `eprintln!` ile Türkçe, yolu ve `uid 10001` iznini anlatan mesaj, `exit(2)`.
+14. **Testlerde `let _ =` (`tests/tracking.rs`).** Ping sonuçları `assert_eq!(.., 204)` ile doğrulanır.
+15. **README:** ters vekil için `proxy_set_header Host $host;` gerekliliği (aksi halde 403 `csrf`).
+
+### 16.3 Arayüz: işlev
+16. **Yönlendirici nesli (`web/app.js`, okuyucular, `stats.js`).** `handleRoute` her geçişte `KRS.routeGen++`. Her asenkron render ve `reader.open` adımı await sonrası nesli denetler; eskiyse DOM eklemez, `tracker.start` çağırmaz, dinleyici eklemez, varsa kendi temizliğini yapar ve sonuç atılır. `body.reading` yalnız geçerli rota okuyucuysa kalır. `pollScan`, uçuştaki yanıt sonrası yeni zamanlayıcı kurmaz.
+17. **Kütüphane sayfalama (`renderLibrary`/`loadSeries`).** Sonsuz kaydırma: `IntersectionObserver` + yedek "Daha fazla" `.btn.tonal`; `limit=60`, `offset` artar, `total` dolunca durur. İstek sırası: `seq` ile eski yanıtlar atılır; filtre/arama değişince liste sıfırlanır. Test: e2e'de değil, kod denetimiyle; `make_books.py` eklemiyoruz.
+18. **Metin okuyucu sınırları (`reader-text.js`).** Son bölümde "sonraki" ve ilk bölümde "önceki" hiçbir şey yapmaz, düğmeler `disabled`; konum değişmez. Ok tuşları: ↑/↓ çerçeveyi kaydırır (ebeveyn tuş dinleyicisi), ←/→ `[`/`]` ile aynı.
+19. **Bölüm hataları (`reader-text.js`).** `iframe.onload` içinde `contentDocument.contentType !== 'text/html'` ise: içeriği gösterme, ilerleme YAZMA, `.empty.error` ve "Yeniden dene" göster. JSON gövdesi 401 ise `#/giris`.
+20. **Çizgi roman hataları (`reader-comic.js`).** `pageImg.onerror`: sayfa alanında `.empty.error` ve "Yeniden dene". `startX` `pointerup`/`pointercancel`'da sıfırlanır; yalnız sahnede başlayan sürükleme sayılır. Sahneye `touch-action: pan-y pinch-zoom`.
+21. **Kısayollar.** `ctrlKey/metaKey/altKey` varsa okuyucu kısayolu çalışmaz, `preventDefault` yok.
+22. **Takip (`tracker.js`).**
+    - `PUT progress` `local_date` = o anın yerel günü (`KRS.todayLocal()`); ping'de oturum başlangıç günü kalır.
+    - `pendingProgress` yalnız başarıdan sonra temizlenir, hatada korunur ve sonraki denemede gider.
+    - `visibilitychange:hidden` da `flushProgress(keepalive)` çağırır.
+    - 401 → `KRS.navigate('#/giris')`.
+    - `activeSeconds` 0'dan başlar.
+    - Test: `reader.spec.mjs`.
+23. **Geçmiş "Daha fazla".** İstek sürerken düğme `disabled`; sonraki sayfa hatası listeyi silmez, snackbar gösterir.
+
+### 16.4 Arayüz: görsel (ekran görüntüsü bulguları)
+24. **Metin okuyucu teması.** `localStorage['krs.readerTheme']` yoksa okuma teması uygulamanın etkin modunu izler (koyu → `dark`, açık → `light`); kullanıcı seçince sabitlenir. Koyu uygulamada beyaz sayfa görünmez. Tema değişince `<iframe>` yüklenmeden arka plan flaşı olmaz: iframe elemanının arka planı önceden `bg` yapılır.
+25. **Okuyucu çubukları (15.7'yi değiştirir).** `.reader-bar` opaktır: `background: var(--md-sys-color-surface-container)`. Metin alttan görünmez. Metin okuyucuda çerçeve belgesinin üst/alt boşluğu çubuk yüksekliği kadar: `padding-top: 80px; padding-bottom: 96px` (frame.css); `body` kuralı buna göre.
+26. **Çizgi roman okuyucu.** Uygulama modu ne olursa olsun `.reader.comic` kök elemanına koyu palet rolleri CSSOM ile yazılır (`KRS_THEME.generatePalette(seed,true)`), çubuklar koyu görünür.
+27. **Grafikler (`stats.js`).**
+    - SVG boyutu `viewBox` ölçeklemesi yerine gerçek kap genişliğiyle çizilir (`ResizeObserver`, 150 ms debounce), metin her genişlikte 12 px.
+    - Y ekseni ticks: benzersiz ve "güzel" değerler (1-2-5×10ⁿ); `max` 0 ise yalnız 0 ve 1 (etiketsiz boş durum metni "Henüz veri yok"). Dakika ölçeğinde `max < 1` ise saniye birimi kullanılır ve başlık buna göre.
+    - Sıfır değerli gün için çubuk çizilmez (`rect` yok); tooltip için tam yükseklikte saydam `rect.hit` çizilebilir ama `fill: transparent`.
+    - X etiketleri 360 px'te en çok 3, 1280 px'te 5; çakışmaz.
+    - Süre metni: `<60 sn` ise `12 sn`, `<1 sa` ise `5 dk 12 sn`, üstü `2 sa 5 dk`.
+28. **Hesap.** `.field` ve form düğmeleri `max-width: 480px`. Swatch 44 px, boşluk 4 px (360 px'te altısı tek satıra sığar); özel renk girişi aynı boyutta.
+29. **Chip grupları.** ≥840 px'te gruplar arasında 24 px boşluk ve 1 px `outline-variant` dikey ayırıcı; <840 px'te iki grup ayrı satırda, her biri tek satırda yatay kaydırılabilir (`overflow-x:auto`, kaydırma çubuğu gizli), kırılmaz.
+
+### 16.5 Ekran görüntüsü kapsamı (15.10'a ek)
+Her kombinasyon için ayrıca alınır (axe da çalışır): `giris` (oturumsuz), `gecmis` (`#/gecmis`), `yonetim` (`#/yonetim`), `okuyucu-epub-ayarlar` (alt sayfa açık), `okuyucu-comic-ayarlar` (alt sayfa açık), `seri-durum-dialog` (durum diyaloğu açık). Birer kez: `kutuphane-bos` (ilk testte tarama öncesi, 1280 açık), `kurulum` (1280 açık), `kutuphane-yesil` (1280 koyu, `KRS_THEME.setSeed('#2E7D32')` sonrası).
+
+e2e sınamaları güçlenir: 27'deki sıfır çubuk yokluğu ve en az bir veri `rect`'i (`rect:not(.hit)`, sıfır yüksekliksiz); geçmiş satırında süre metni; koyu modda `okuyucu-epub` çerçeve arka planının açık olmadığı (`getComputedStyle` parlaklık < 0.3); 18'deki son bölümde "sonraki" `disabled`; okuyucudan hemen çıkıldığında `body.reading` kalmadığı.
