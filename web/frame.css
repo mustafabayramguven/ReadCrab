@@ -1,1 +1,27 @@
-/* yer tutucu: içerik görev 14 kapsamında yazılır */
+html {
+  background: var(--bg);
+  color: var(--fg);
+  font-size: var(--fs, 18px);
+  font-family: var(--font, Georgia, "Noto Serif", "DejaVu Serif", serif);
+}
+
+body {
+  max-width: 38rem;
+  margin: 0 auto;
+  padding: 24px 20px 96px;
+  line-height: 1.7;
+  overflow-wrap: break-word;
+}
+
+img {
+  max-width: 100%;
+  height: auto;
+}
+
+a {
+  color: var(--link);
+}
+
+h1, h2, h3 {
+  line-height: 1.25;
+}
