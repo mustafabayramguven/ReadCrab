@@ -77,6 +77,10 @@ test('okuyucu uçtan uca', async ({ page }) => {
   fs.copyFileSync('screenshots/kurulum-1280-light.png', 'screenshots/kurulum.png');
   await runAxeCheck(page, 'kurulum 1280 light');
 
+  await page.route('**/api/series*', (r) =>
+    r.fulfill({ json: { total: 0, items: [] } })
+  );
+
   await page.locator('#setup-username').fill('e2e');
   await page.locator('#setup-password').fill('e2e-pass-123');
   await page.getByRole('button', { name: 'Kurulumu tamamla' }).click();
@@ -84,8 +88,8 @@ test('okuyucu uçtan uca', async ({ page }) => {
   await expect(page).toHaveURL(/#\/$/);
 
   // Tarama öncesi boş kütüphane ekran görüntüsü (1280 açık)
-  const scanBtn = page.getByRole('button', { name: 'Kütüphaneyi tara' }).first();
-  await expect(scanBtn).toBeVisible();
+  await expect(page.locator('.empty')).toBeVisible();
+  await expect(page.locator('.empty h2')).toHaveText('Kütüphane boş');
   await page.waitForLoadState('networkidle');
   await page.screenshot({
     path: 'screenshots/kutuphane-bos-1280-light.png',
@@ -97,7 +101,29 @@ test('okuyucu uçtan uca', async ({ page }) => {
   );
   await runAxeCheck(page, 'kutuphane-bos 1280 light');
 
+  // Arama sonuçsuz durumu ekran görüntüsü (kutuphane-sonuc-yok)
+  await page
+    .getByRole('searchbox', { name: 'Kütüphanede ara' })
+    .fill('olmayan');
+  await expect(page.locator('.empty h2')).toHaveText('Sonuç bulunamadı');
+  await expect(page.locator('.empty')).toBeVisible();
+  await page.waitForLoadState('networkidle');
+  await page.screenshot({
+    path: 'screenshots/kutuphane-sonuc-yok-1280-light.png',
+    fullPage: false
+  });
+  fs.copyFileSync(
+    'screenshots/kutuphane-sonuc-yok-1280-light.png',
+    'screenshots/kutuphane-sonuc-yok.png'
+  );
+  await runAxeCheck(page, 'kutuphane-sonuc-yok 1280 light');
+
+  await page.unroute('**/api/series*');
+  await page.getByRole('button', { name: 'Aramayı temizle' }).click();
+
   // 2. Arayüzde "Kütüphaneyi tara", /api/scan-status running:false olana kadar yokla
+  const scanBtn = page.getByRole('button', { name: 'Kütüphaneyi tara' }).first();
+  await expect(scanBtn).toBeVisible();
   await scanBtn.click();
 
   await expect
