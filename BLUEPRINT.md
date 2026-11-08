@@ -876,3 +876,504 @@ Görev 22 (İŞÇİ-2): `main` koşusunda `publish` işinin yeşil olduğunu do�
 1. `gh api /users/mustafabayramguven/packages/container/kavita-rs --jq .visibility`.
 2. Anonim çekme sınaması: `curl -s "https://ghcr.io/token?scope=repository:mustafabayramguven/kavita-rs:pull"` yanıtındaki `token` ile `curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer <token>" -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json" https://ghcr.io/v2/mustafabayramguven/kavita-rs/manifests/latest`. 200 ise anonim çekilebilir, 401/403/404 ise değildir.
 3. Rapor: `visibility` değeri ve anonim çekme sonucu.
+
+---
+
+## 15. Material You tasarım sistemi (önceki bölümlerle çelişirse bu bölüm kazanır)
+
+Bu bölüm 9. bölümün görsel ve etkileşim katmanını, 5.3'teki `GET /api/series` sözleşmesini ve 13/14'teki görev dağılımını değiştirir. Aşağıda "değişir" denmeyen her şey geçerlidir. Kısıtlar sabittir:
+- Node derleme yoktur.
+- CDN yoktur.
+- `@material/web` kullanılmaz.
+- Uygulama CSP'si `style-src 'self'` kalır, `style=""` özniteliği yoktur.
+- `FRAME_CSP` (14.2) değişmez.
+- JS yalnız CSSOM ile stil verir (`el.style.setProperty`, `el.style.x = ...`).
+- Kavita logosu ve Google logosu yoktur.
+- Kullanılmayan bileşen için CSS yazılmaz.
+
+Doğrulanan sabit kaynaklar (jsDelivr üzerinden HTTP 200, 2026-11-08):
+
+| Amaç | URL | Not |
+|---|---|---|
+| Latin yazı tipi | `https://cdn.jsdelivr.net/npm/@fontsource-variable/roboto-flex@5.3.0/files/roboto-flex-latin-wght-normal.woff2` | 34320 bayt |
+| Latin-ext yazı tipi | `https://cdn.jsdelivr.net/npm/@fontsource-variable/roboto-flex@5.3.0/files/roboto-flex-latin-ext-wght-normal.woff2` | 23480 bayt |
+| Yazı tipi lisansı | `https://cdn.jsdelivr.net/npm/@fontsource-variable/roboto-flex@5.3.0/LICENSE` | OFL |
+| İkon SVG'leri | `https://cdn.jsdelivr.net/npm/@material-symbols/svg-400@0.48.3/outlined/<ad>.svg` ve `<ad>-fill.svg` | Apache-2.0, her SVG `viewBox="0 -960 960 960"` |
+| e2e erişilebilirlik | npm `@axe-core/playwright` sürüm `4.11.0` | Doğrulandı |
+
+Kullanılacak ikon adlarının hepsi `0.48.3` paketinde 200 döndü. Adlar 15.5'te listelenir.
+
+### 15.1 Dosya değişiklikleri (bölüm 3 ağacına eklemeler)
+
+```
+web/theme.js              (YENİ) palet üretici + tema uygulayıcı
+web/theme.test.mjs        (YENİ) Node birim testi, CI'de koşar, sunulmaz
+web/icons.svg             (YENİ) SVG sprite
+web/fonts/roboto-flex-latin.woff2
+web/fonts/roboto-flex-latin-ext.woff2
+web/fonts/LICENSE         OFL metni (fontsource LICENSE)
+web/ICONS-LICENSE.txt     Material Symbols Apache-2.0 atfı + kaynak URL + sürüm
+scripts/build_icons.py    (YENİ) icons.svg üretici (python3 -I, yalnız stdlib)
+```
+
+Statik sunum (task 4, `app.rs`):
+- Yol `/static/{*ad}` olur. Tablo şu adları tanır, diğerleri 404:
+  - `app.js`, `tracker.js`, `reader-comic.js`, `reader-text.js`, `stats.js`, `theme.js`
+  - `style.css`, `frame.css`
+  - `favicon.svg`, `icons.svg`
+  - `fonts/roboto-flex-latin.woff2`, `fonts/roboto-flex-latin-ext.woff2`
+- Gömme `include_str!` ile yapılır. Yazı tipi dosyaları `include_bytes!` ile gömülür.
+- İçerik türleri:
+  - `application/javascript; charset=utf-8`
+  - `text/css; charset=utf-8`
+  - `image/svg+xml`
+  - `font/woff2`
+- `Cache-Control`: JS ve CSS için `no-cache`. `icons.svg`, `favicon.svg` ve yazı tipleri için `public, max-age=86400`.
+- Uygulama CSP'si (6.3 madde 4) değişmez. `font-src 'self'` zaten `default-src 'self'` ile gelir. Ayrı bir direktif eklenmez.
+- `web/theme.test.mjs` ve `web/fonts/LICENSE` sunulmaz.
+
+`web/index.html` kabuğu (task 20a son halini verir):
+- `<head>` içinde sıra: `<meta charset>`, viewport, `<meta name="color-scheme" content="light dark">`, `<meta name="theme-color">`, `<link rel="icon" href="/static/favicon.svg">`, `<link rel="stylesheet" href="/static/style.css">`, ardından senkron (`defer`/`async` YOK) `<script src="/static/theme.js"></script>`. Bu sıra ilk boyamadan önce paleti yazar, FOUC olmaz.
+- Gövde sonunda sıra: `tracker.js`, `reader-comic.js`, `reader-text.js`, `stats.js`, `app.js`.
+- `<noscript>` içinde Türkçe bir satır bulunur: "Bu uygulama için JavaScript gerekir."
+
+### 15.2 Token sistemi (`web/style.css` başı)
+
+Adlandırma M3'tür. Değerler `:root` altında tanımlanır.
+
+**Renk rolleri** (hepsi `--md-sys-color-<rol>`). `theme.js` bunların hepsini `documentElement.style.setProperty` ile yazar:
+- `primary`, `on-primary`, `primary-container`, `on-primary-container`
+- `secondary`, `on-secondary`, `secondary-container`, `on-secondary-container`
+- `tertiary`, `on-tertiary`, `tertiary-container`, `on-tertiary-container`
+- `error`, `on-error`, `error-container`, `on-error-container`
+- `surface`, `surface-dim`, `surface-bright`
+- `surface-container-lowest`, `surface-container-low`, `surface-container`, `surface-container-high`, `surface-container-highest`
+- `on-surface`, `on-surface-variant`, `outline`, `outline-variant`
+- `inverse-surface`, `inverse-on-surface`, `inverse-primary`
+- `scrim` (her zaman `#000000`)
+
+**JS'siz yedek değerler** (M3 taban çizgisi, mor tohum `#6750A4`). `:root` açık değerleri taşır:
+- `@media (prefers-color-scheme: dark)` içinde `:root:not([data-theme="light"])` koyu değerleri taşır.
+- `:root[data-theme="dark"]` aynı koyu değerleri taşır.
+- `theme.js` çalışınca satır içi (inline) değerler bunları geçersiz kılar.
+
+| Rol | Açık | Koyu |
+|---|---|---|
+| primary | #6750A4 | #D0BCFF |
+| on-primary | #FFFFFF | #381E72 |
+| primary-container | #EADDFF | #4F378B |
+| on-primary-container | #21005D | #EADDFF |
+| secondary | #625B71 | #CCC2DC |
+| on-secondary | #FFFFFF | #332D41 |
+| secondary-container | #E8DEF8 | #4A4458 |
+| on-secondary-container | #1D192B | #E8DEF8 |
+| tertiary | #7D5260 | #EFB8C8 |
+| on-tertiary | #FFFFFF | #492532 |
+| tertiary-container | #FFD8E4 | #633B48 |
+| on-tertiary-container | #31111D | #FFD8E4 |
+| error | #B3261E | #F2B8B5 |
+| on-error | #FFFFFF | #601410 |
+| error-container | #F9DEDC | #8C1D18 |
+| on-error-container | #410E0B | #F9DEDC |
+| surface | #FEF7FF | #141218 |
+| surface-dim | #DED8E1 | #141218 |
+| surface-bright | #FEF7FF | #3B383E |
+| surface-container-lowest | #FFFFFF | #0F0D13 |
+| surface-container-low | #F7F2FA | #1D1B20 |
+| surface-container | #F3EDF7 | #211F26 |
+| surface-container-high | #ECE6F0 | #2B2930 |
+| surface-container-highest | #E6E0E9 | #36343B |
+| on-surface | #1D1B20 | #E6E0E9 |
+| on-surface-variant | #49454F | #CAC4D0 |
+| outline | #79747E | #938F99 |
+| outline-variant | #CAC4D0 | #49454F |
+| inverse-surface | #322F35 | #E6E0E9 |
+| inverse-on-surface | #F5EFF7 | #322F35 |
+| inverse-primary | #D0BCFF | #6750A4 |
+| scrim | #000000 | #000000 |
+
+**Tipografi.** Aile `--md-ref-typeface-brand: "Roboto Flex", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`. Her stil için `--md-sys-typescale-<rol>-<boyut>-{size,line,weight,tracking}` değişkenleri tanımlanır. Boyut ve satır yüksekliği px, ağırlık sayı, tracking px:
+
+| Rol | Boyut / satır / ağırlık / tracking |
+|---|---|
+| display-large | 57/64/400/-0.25 |
+| display-medium | 45/52/400/0 |
+| display-small | 36/44/400/0 |
+| headline-large | 32/40/400/0 |
+| headline-medium | 28/36/400/0 |
+| headline-small | 24/32/400/0 |
+| title-large | 22/28/400/0 |
+| title-medium | 16/24/500/0.15 |
+| title-small | 14/20/500/0.1 |
+| body-large | 16/24/400/0.5 |
+| body-medium | 14/20/400/0.25 |
+| body-small | 12/16/400/0.4 |
+| label-large | 14/20/500/0.1 |
+| label-medium | 12/16/500/0.5 |
+| label-small | 11/16/500/0.5 |
+
+Her stil için yardımcı sınıf bulunur (`.type-body-large` vb.). Yalnız kullanılanlar yazılır.
+
+`@font-face` (aile `"Roboto Flex"`, `font-weight: 100 1000`, `font-display: swap`):
+- latin: `/static/fonts/roboto-flex-latin.woff2`, `unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD`.
+- latin-ext: `/static/fonts/roboto-flex-latin-ext.woff2`, `unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF`.
+- Türkçe `ğ Ğ ş Ş İ ı ç ö ü` bu iki alt kümeyle karşılanır.
+
+**Şekil** (`--md-sys-shape-corner-*`):
+
+| Ad | Değer |
+|---|---|
+| none | 0 |
+| extra-small | 4px |
+| small | 8px |
+| medium | 12px |
+| large | 16px |
+| extra-large | 28px |
+| full | 9999px |
+
+**Yükselti** (`--md-sys-elevation-level0..3`):
+- level0: `none`
+- level1: `0 1px 2px rgb(0 0 0 / .30), 0 1px 3px 1px rgb(0 0 0 / .15)`
+- level2: `0 1px 2px rgb(0 0 0 / .30), 0 2px 6px 2px rgb(0 0 0 / .15)`
+- level3: `0 1px 3px rgb(0 0 0 / .30), 0 4px 8px 3px rgb(0 0 0 / .15)`
+
+**Hareket:**
+- Easing:
+  - `--md-sys-motion-easing-emphasized: cubic-bezier(.2,0,0,1)`
+  - `-emphasized-decelerate: cubic-bezier(.05,.7,.1,1)`
+  - `-emphasized-accelerate: cubic-bezier(.3,0,.8,.15)`
+  - `-standard: cubic-bezier(.2,0,0,1)`
+- Süre (ms): `short1` 50, `short2` 100, `short3` 150, `short4` 200, `medium1` 250, `medium2` 300, `medium3` 350, `medium4` 400, `long1` 450, `long2` 500.
+- `@media (prefers-reduced-motion: reduce)` ve `html[data-motion="reduced"]` içinde:
+  - Tüm süre değişkenleri `0ms` olur.
+  - İskelet ve belirsiz (indeterminate) progress animasyonları `animation: none` olur.
+  - Dalga (ripple) üretilmez.
+
+**Durum katmanı (state layer):** Ortak seçici listesi `.btn, .icon-btn, .fab, .chip, .list-item, .nav-item, .card, .seg-btn`. Bu elemanlar `position: relative; overflow: hidden` olur ve `::before { content:""; position:absolute; inset:0; background: currentColor; opacity:0; border-radius: inherit; pointer-events:none; transition: opacity var(--md-sys-motion-duration-short2) }` kuralını alır.
+- `:hover::before` opaklığı `.08`
+- `:focus-visible::before` opaklığı `.10`
+- `:active::before` opaklığı `.10`
+
+Görünür odak halkası tüm etkileşimli elemanlarda `:focus-visible { outline: 3px solid var(--md-sys-color-secondary); outline-offset: 2px }` olur. Yalnız `:focus` ile halka çizilmez.
+
+### 15.3 `web/theme.js`: palet üretimi (kesin formül)
+
+Dosya klasik betiktir (modül değil). Başlık yorumu: `// shortcut: HCT yerine OKLCH, renkler resmi M3 üreticisinden birebir değil`. Sonda `window.KRS_THEME = {...}` atanır ve `if (typeof module !== 'undefined') module.exports = window_or_local_obj` satırı vardır. Böylece Node testi `createRequire(import.meta.url)('./theme.js')` ile yükleyebilir. `window` yoksa (Node) `globalThis` kontrolü hata vermez.
+
+**Dönüşümler** (Ottosson OKLab, sabitler aynen):
+- sRGB aktarımı: `lin = c <= 0.04045 ? c/12.92 : ((c+0.055)/1.055)**2.4`; ters yönde `c <= 0.0031308 ? 12.92*c : 1.055*c**(1/2.4) - 0.055`.
+- Lineer sRGB → OKLab:
+  - `l = 0.4122214708 r + 0.5363325363 g + 0.0514459929 b`
+  - `m = 0.2119034982 r + 0.6806995451 g + 0.1073969566 b`
+  - `s = 0.0883024619 r + 0.2817188376 g + 0.6299787005 b`
+  - `l_,m_,s_ = küp kök`
+  - `L = 0.2104542553 l_ + 0.7936177850 m_ - 0.0040720468 s_`
+  - `a = 1.9779984951 l_ - 2.4285922050 m_ + 0.4505937099 s_`
+  - `b = 0.0259040371 l_ + 0.7827717662 m_ - 0.8086757660 s_`
+- OKLab → lineer sRGB:
+  - `l_ = L + 0.3963377774 a + 0.2158037573 b`
+  - `m_ = L - 0.1055613458 a - 0.0638541728 b`
+  - `s_ = L - 0.0894841775 a - 1.2914855480 b`
+  - Üçü küp alınır (`l,m,s`).
+  - `r = 4.0767416621 l - 3.3077115913 m + 0.2309699292 s`
+  - `g = -1.2684380046 l + 2.6097574011 m - 0.3413193965 s`
+  - `b = -0.0041960863 l - 0.7034186147 m + 1.7076147010 s`
+- OKLCH: `C = hypot(a,b)`, `h = atan2(b,a)` derece cinsinden 0..360.
+
+**İşlevler:**
+```js
+function toneToY(tone)        // tone 0..100 → Y: t>8 ? ((t+16)/116)**3 : t/903.3   (CIE L*)
+function luminance(hex)       // WCAG göreli parlaklık (0.2126 R + 0.7152 G + 0.0722 B, lineer)
+function contrast(hexA, hexB) // (Ymax+0.05)/(Ymin+0.05)
+function hexToOklch(hex)      // → {L,C,h}
+function maxChroma(L, h, C)   // sığma: C'den başlayıp 24 adım ikili aramayla gamut içi en büyük c ≤ C
+function colorAtTone(h, C, tone)  // → '#rrggbb'
+function generatePalette(seedHex, dark)  // → { 'primary': '#..', ... }
+function readerColors(name, seedHex)     // name: 'light'|'dark'|'sepia' → {bg,fg,link}
+function apply(seedHex, mode)    // mode: 'auto'|'light'|'dark'
+function init()                  // localStorage'ı okur, apply eder, auto için matchMedia dinler
+```
+
+**`colorAtTone(h, C, tone)`** (luminans eşleme, kontrast garantisi için):
+1. `Yt = toneToY(tone)`. `Yt` ≤ 0.0001 ise `#000000`, ≥ 0.9999 ise `#ffffff` döner.
+2. `L = cbrt(Yt)`.
+3. En çok 12 kez tekrarla: `c = maxChroma(L, h, C)`, lineer sRGB hesapla ve [0,1]'e kırp, `Y = 0.2126 r + 0.7152 g + 0.0722 b`. `|Y − Yt| < 1e-4` ise dur. Aksi halde `L = clamp(L * cbrt(Yt / max(Y,1e-6)), 0, 1)`.
+4. Gamma uygula, `round(c*255)` ile onaltılık yaz.
+
+Bu yöntem her tonun gerçek parlaklığını M3 tonuna eşitler, bu yüzden kontrast oranları M3 ton farklarıyla öngörülür.
+
+**Palet parametreleri** (kaynak renk `hexToOklch` → `{L0,C0,h0}`):
+- `Cp = clamp(C0, 0.05, 0.17)`
+- primary paleti: `(h0, Cp)`
+- secondary paleti: `(h0, max(0.02, Cp*0.33))`
+- tertiary paleti: `((h0 + 60) % 360, max(0.04, Cp*0.55))`
+- neutral: `(h0, 0.006)`
+- neutral-variant: `(h0, 0.012)`
+- error paleti: `(29.2, 0.19)` (sabit, gamut sınırlar)
+
+**Rol → palet/ton** (`tone(p,t) = colorAtTone(h_p, C_p, t)`):
+
+| Rol | Açık | Koyu |
+|---|---|---|
+| primary | P40 | P80 |
+| on-primary | P100 | P20 |
+| primary-container | P90 | P30 |
+| on-primary-container | P10 | P90 |
+| secondary / on-secondary / secondary-container / on-secondary-container | S40 / S100 / S90 / S10 | S80 / S20 / S30 / S90 |
+| tertiary ailesi | T40 / T100 / T90 / T10 | T80 / T20 / T30 / T90 |
+| error ailesi | E40 / E100 / E90 / E10 | E80 / E20 / E30 / E90 |
+| surface | N98 | N6 |
+| surface-dim | N87 | N6 |
+| surface-bright | N98 | N24 |
+| surface-container-lowest | N100 | N4 |
+| surface-container-low | N96 | N10 |
+| surface-container | N94 | N12 |
+| surface-container-high | N92 | N17 |
+| surface-container-highest | N90 | N22 |
+| on-surface | N10 | N90 |
+| on-surface-variant | NV30 | NV80 |
+| outline | NV50 | NV60 |
+| outline-variant | NV80 | NV30 |
+| inverse-surface | N20 | N90 |
+| inverse-on-surface | N95 | N20 |
+| inverse-primary | P80 | P40 |
+| scrim | #000000 | #000000 |
+
+(P/S/T/E/N/NV sırasıyla primary, secondary, tertiary, error, neutral, neutral-variant.)
+
+**Hazır kaynak renkler** (`SEEDS`, bu sırayla):
+
+| Ad | Hex |
+|---|---|
+| Mor | #6750A4 |
+| Mavi | #0B57D0 |
+| Yeşil | #2E7D32 |
+| Turuncu | #C25E00 |
+| Pembe | #B3265F |
+| Turkuaz | #00796B |
+
+Varsayılan Mor, mod `auto`.
+
+**`apply(seedHex, mode)`:**
+1. `dark = mode==='dark' || (mode==='auto' && matchMedia('(prefers-color-scheme: dark)').matches)`.
+2. `generatePalette(seedHex, dark)` sonucunu `documentElement.style.setProperty('--md-sys-color-' + rol, hex)` ile yazar.
+3. `documentElement.dataset.theme = dark ? 'dark' : 'light'`.
+4. `documentElement.style.colorScheme = dark ? 'dark' : 'light'`.
+5. `<meta name="theme-color">` içeriğini `surface` rengine ayarlar.
+
+**Saklama ve başlatma:** `localStorage['krs.seed']` (`#rrggbb`, geçersizse Mor) ve `localStorage['krs.mode']` (`auto|light|dark`, geçersizse `auto`). Sunucuya hiçbir şey gönderilmez. `init()` mod `auto` iken `matchMedia(...).addEventListener('change', ...)` ile yeniden uygular. Hareket anahtarı `localStorage['krs.motion']` (`reduced` ise `documentElement.dataset.motion='reduced'`) `init()` içinde okunur. `window.KRS_THEME` ayrıca `setSeed(hex)`, `setMode(m)`, `setMotion(bool)` işlevlerini dışa verir. Bunlar localStorage'a yazar ve `apply` eder.
+
+**`readerColors(name, seedHex)`** (metin okuyucu için, uygulama modundan bağımsız):
+- `'light'`: `generatePalette(seed,false)` içinden `bg=surface`, `fg=on-surface`, `link=primary`.
+- `'dark'`: `generatePalette(seed,true)` içinden aynı üç rol.
+- `'sepia'`: tohumdan bağımsız sabit `bg=#F4ECD8`, `fg=#433422`, `link=#7A4A12`.
+
+### 15.4 `web/theme.test.mjs` (CI'de `node web/theme.test.mjs`)
+
+Yalnız `node:assert/strict` ve `node:module` kullanılır. Bağımlılık yoktur. Başarısızlıkta `process.exit(1)`.
+
+Testler:
+1. `roundtrip`: 20 sabit örnek için `hexToOklch → colorAtTone` değil, saf dönüşüm `oklchToHex(hexToOklch(x)) === x` (±1 kanal toleransı).
+2. `tone_luminance`: 6 tohum × `[10,40,80,90]` tonu için `|luminance(colorAtTone(h,Cp,t)) − toneToY(t)| < 0.01`.
+3. `palette_shape`: her tohum ve mod için 15.3 tablosundaki tüm roller var ve hepsi `/^#[0-9a-f]{6}$/`.
+4. `contrast_pairs`: 6 tohum × açık/koyu için şu çiftlerin hepsinde `contrast ≥ 4.5`:
+   - `on-primary/primary`, `on-primary-container/primary-container`
+   - `on-secondary/secondary`, `on-secondary-container/secondary-container`
+   - `on-tertiary/tertiary`, `on-tertiary-container/tertiary-container`
+   - `on-error/error`, `on-error-container/error-container`
+   - `on-surface/surface`, `on-surface/surface-dim`, `on-surface/surface-bright`
+   - `on-surface/` her biri için `surface-container-lowest`, `-low`, `surface-container`, `-high`, `-highest`
+   - `on-surface-variant/surface`, `on-surface-variant/surface-container-highest`
+   - `inverse-on-surface/inverse-surface`, `inverse-primary/inverse-surface`
+5. `nontext_pairs`: aynı 12 kombinasyonda `outline/surface ≥ 3` ve `primary/surface ≥ 3`.
+6. `reader_colors`: `light`, `dark`, `sepia` × 6 tohum için `fg/bg ≥ 7` ve `link/bg ≥ 4.5`.
+
+CI (`.github/workflows/ci.yml`, `test` işi): 14.6 E'deki `node --check` döngüsünün hemen altına `node web/theme.test.mjs` adımı eklenir. Node `ubuntu-latest` üzerinde hazırdır. Kurulum yoktur.
+
+### 15.5 İkonlar
+
+`scripts/build_icons.py` (yalnız stdlib: `urllib.request`, `re`, `os`, `sys`, `tempfile`; `python3 -I` ile çalışır):
+- Her ad için `https://cdn.jsdelivr.net/npm/@material-symbols/svg-400@0.48.3/outlined/<ad>.svg` indirir.
+- Çıktı: `web/icons.svg`, kökü `<svg xmlns="http://www.w3.org/2000/svg">`, her ikon `<symbol id="<ad>" viewBox="0 -960 960 960"><path d="..."/></symbol>`.
+- `d` değeri `re.search(r'<path d="([^"]+)"')` ile alınır, tek `<path>` olmayan SVG'de betik hata verip durur.
+- İndirilen ham dosyalar `tempfile.mkdtemp()` ile yeni boş dizine yazılır, depoya girmez.
+- Betik depoya commit edilir. Betiğin docstring'inde sürüm ve lisans (`Apache-2.0`) yazar.
+
+İkon listesi (hepsi doğrulandı):
+- Gezinti: `menu_book`, `history`, `bar_chart`, `person`, `admin_panel_settings`, ve aktif durum için `menu_book-fill`, `history-fill`, `bar_chart-fill`, `person-fill`, `admin_panel_settings-fill`.
+- Genel: `search`, `close`, `arrow_back`, `arrow_forward`, `chevron_left`, `chevron_right`, `add`, `delete`, `check`, `check_circle`, `logout`, `lock`, `error`, `sync`, `sort`, `more_vert`, `keyboard_arrow_up`.
+- Okuyucu: `format_list_bulleted`, `text_fields`, `tune`, `fit_screen`, `fullscreen`, `auto_stories`.
+- Tema: `light_mode`, `dark_mode`, `palette`.
+- İstatistik: `schedule`, `flag`, `local_fire_department`.
+
+Kullanım: `<svg class="icon" aria-hidden="true"><use href="/static/icons.svg#menu_book"/></svg>`. `.icon { width: 24px; height: 24px; fill: currentColor; flex: none }`. İkon yazı tipi yoktur.
+
+`web/ICONS-LICENSE.txt`: "Material Symbols, Google, Apache License 2.0, https://github.com/google/material-design-icons, paket `@material-symbols/svg-400@0.48.3`" ve Apache-2.0 sürüm bağlantısı.
+
+### 15.6 Düzen ve bileşenler (kesin sınıf adları)
+
+Sınıf adları görevler arasında sözleşmedir. İşçiler başka ad uydurmaz.
+
+**Kabuk:**
+- `body > .app-shell` (grid). `>= 840px`: sol `.nav-rail` (genişlik 80px, `surface`, öğeler `.nav-item` dikey ikon+etiket, aktif öğe 56x32 `secondary-container` hap göstergesi ve `-fill` ikon, etiket `label-medium`).
+- `< 840px`: altta `.nav-bar` (yükseklik 80px, `surface-container`, aynı `.nav-item`, 3-5 öğe).
+- Öğeler: Kütüphane (`menu_book`, `#/`), Geçmiş (`history`, `#/gecmis`), İstatistik (`bar_chart`, `#/istatistik`), Hesap (`person`, `#/hesap`), Yönetim (`admin_panel_settings`, `#/yonetim`, yalnız admin). Aktif öğede `aria-current="page"`.
+- Üst: `.top-app-bar` (yükseklik 64px, başlık `title-large`, sağda `.icon-btn`'lar). Kaydırınca `surface-container` arka planına geçer (`scroll` olayı + sınıf `.scrolled`).
+- İçerik `main.page` (en çok 1200px, 16px kenar boşluğu, ≥840px'te 24px).
+- Okuyucuda (`#/oku/...`) `body.reading` sınıfı rail/bar/top bar'ı gizler.
+
+**Kütüphane sayfası (`#/`):**
+- `.search-bar`: yükseklik 56px, `surface-container-high`, tam yuvarlak, solda `search` ikonu, `<input type="search" aria-label="Kütüphanede ara">`, doluyken sağda `close` `.icon-btn`. 250 ms debounce ile `q` gönderir.
+- Altında iki filter chip grubu (`.chip-group[role="radiogroup"]`, her `.chip[role="radio"][aria-checked]`, seçili iken `secondary-container` ve `check` ikonu):
+  - Sıralama: `Ad` (`name`), `Eklenme` (`added`), `Son okunan` (`recent`).
+  - Durum: `Tümü`, `Okunuyor`, `Bitti`, `Okunmadı`.
+- Kapak ızgarası `.grid`: `grid-template-columns: repeat(auto-fill, minmax(150px, 1fr))`, `>=840px`'te `minmax(180px, 1fr)`, boşluk 16px (`>=840px` 24px).
+- `.card` (`surface-container-low`, radius `medium`, `data-testid="series-card"`, bir `<a>`): üstte `.cover` (`aspect-ratio: 2/3`, `<img loading="lazy" alt="">`, kapak 404 ise harf yer tutucu `div.cover-fallback` `primary-container` zemin, `on-primary-container` metin, başlığın ilk harfi). Cover üstünde alt kenarda 4px `.progress-linear` (okuma ilerlemesi), sağ üstte `.badge` (durum: `Bitti` ya da `Okunuyor`, `tertiary-container`). Altında başlık (`title-small`, en çok 2 satır) ve `body-small` "N cilt".
+- `.fab` (yalnız admin): 56x56, radius `large`, `primary-container`, `sync` ikonu, `aria-label="Kütüphaneyi tara"`. Konum sağ alt, `<840px`'te nav bar'ın 16px üstü. Tarama çalışırken ikon yerine `.progress-circular` gösterir (`done/total` belirlenimli) ve `aria-busy="true"`, tıklama devre dışı. Bitişte `KRS.toast("Tarama tamamlandı")`.
+
+**`GET /api/series` sözleşme değişikliği (bölüm 5.3'ü değiştirir, task 11):**
+- Yeni sorgu parametresi `status=all|reading|finished|unread` (varsayılan `all`). Geçersizse 400 `bad_request`.
+- Yanıt öğesine iki alan eklenir: `reading_count` (serideki `status='reading'` görünür kitap sayısı) ve `percent` (görünür kitapların ortalaması; her kitap için `finished` ise 1, değilse `COALESCE(progress.percent,0)`). Bunlar çağıran kullanıcının ilerlemesinden hesaplanır.
+- Filtre:
+  - `reading` = `reading_count>0 OR (read_count>0 AND read_count<book_count)`
+  - `finished` = `read_count=book_count`
+  - `unread` = `read_count=0 AND reading_count=0`
+- Rozet: `read_count=book_count` ise `Bitti`, `reading` koşulu doğruysa `Okunuyor`, aksi halde yok.
+- Test (`tests/library.rs`): `series_status_filter` (üç durumda doğru serileri döner, geçersiz değer 400, `percent` değerleri beklenen ortalama).
+
+**Seri sayfası (`#/seri/{id}`):**
+- Üst `.top-app-bar` geri oku (`arrow_back`) ve seri adı.
+- Kitaplar `.list` içinde `.list-item` olarak: soldaki 56x84 küçük kapak, `title-medium` başlık, `body-small` "Biçim · N sayfa/bölüm", sağda durum chip'i. Satırın altında `.progress-linear`.
+- Satıra tıklama okuyucuyu açar. Sağdaki durum `.icon-btn` (`more_vert`) küçük menü yerine bir `dialog` açar: dört durum `radio` ile ("Okunmadı", "Okunuyor", "Bitti", "Bırakıldı") ve "Kaydet" `.btn.filled`; `PUT /api/books/{id}/status` çağrılır.
+- `error` dolu kitapta satır soluk, metin "DRM korumalı" ya da "Bozuk dosya", tıklama devre dışı.
+
+**Düğmeler:** `.btn` (yükseklik 40px, radius `full`, yatay padding 24px, `label-large`). Varyantlar `.btn.filled` (`primary`/`on-primary`), `.btn.tonal` (`secondary-container`/`on-secondary-container`), `.btn.outlined` (1px `outline`, metin `primary`), `.btn.text` (metin `primary`, padding 12px). `.icon-btn` (48x48, radius `full`, ikon 24px).
+
+**Metin alanı:** `.field` içinde `<input placeholder=" ">` ve `<label>`. Outlined: 56px yükseklik, 1px `outline`, radius `extra-small`. Odakta 2px `primary`, etiket `:focus ~ label, :not(:placeholder-shown) ~ label` ile `top` ve `font-size` değişir (label-small, `surface` zeminli kesinti). Hata: `aria-invalid="true"` ile `error` rengi; altında `.field-help` (`body-small`) metni.
+
+**Diyalog:** `<dialog class="md-dialog">`, `surface-container-high`, radius `extra-large`, padding 24px, genişlik `min(560px, calc(100vw - 48px))`, `::backdrop` `color-mix(in srgb, var(--md-sys-color-scrim) 32%, transparent)`. Başlık `headline-small`, gövde `body-medium`, alt satırda `.btn.text` düğmeleri sağa dayalı. Açılış `opacity`+`translateY(16px)` geçişi `medium2` ve `emphasized-decelerate`.
+
+**Snackbar:** tek `div.snackbar[role="status"][aria-live="polite"]`, `inverse-surface`/`inverse-on-surface`, radius `extra-small`, yükseklik 48px, alt orta (`<840px`'te nav bar'ın 16px üstü). `KRS.toast(msg, opts)` imzası `KRS.toast(msg:string, opts?:{action?:string,onAction?:()=>void})`. Eylem düğmesi `.btn.text` rengi `inverse-primary`. Süre 4000 ms, yeni çağrı eskisini değiştirir.
+
+**Progress:**
+- `.progress-linear` 4px, iz `surface-container-highest`, dolgu `primary`, `role="progressbar"` `aria-valuenow`. Dolgu genişliği `style.width` CSSOM ile.
+- `.progress-circular`: 48px SVG, `r=18`, iz `secondary-container`, ark `primary`, `stroke-dasharray`/`stroke-dashoffset` SVG öznitelikleriyle. Belirsiz mod CSS `rotate` animasyonu.
+
+**Segmented düğme:** `.segmented[role="radiogroup"]` içinde `.seg-btn[role="radio"][aria-checked]`. Yükseklik 40px, 1px `outline`, seçili `secondary-container` ve `check` ikonu.
+
+**Slider:** `<input type="range" class="slider">` özel CSS ile (iz 4px, `primary` dolgusu için `linear-gradient` `--val` değişkeniyle, JS `style.setProperty('--val', '%')`, tutamaç 20px daire `primary`). `aria-valuetext` "NN px".
+
+**Switch:** `<input type="checkbox" role="switch" class="switch">`, 52x32 iz, açıkken `primary` zemin ve `on-primary` tutamaç, kapalıyken `surface-container-highest` zemin, 2px `outline` kenar. Yalnız Hesap sayfasında "Hareketi azalt" için kullanılır.
+
+**İskelet ve boş durumlar:**
+- `.skeleton`: `surface-container-high`→`surface-container-highest` gradyanı, 1.4s `shimmer` animasyonu. Liste için 6 kart/satır iskeleti gösterilir.
+- `.empty`: ortalı sütun, 48px ikon, `title-large` başlık, `body-medium` metin, isteğe bağlı `.btn.tonal`. Mesajlar:
+  - Kütüphane boş: "Kütüphane boş" / "/books klasörüne seri klasörleri ekleyin ve ardından tarayın." Admin için "Kütüphaneyi tara" düğmesi.
+  - Arama sonucu yok: "Sonuç bulunamadı" / "Başka bir arama deneyin."
+  - Geçmiş boş: "Henüz okuma kaydı yok".
+  - Hata durumu (`.empty.error`, `error` ikonu): "Yüklenemedi" / API mesajı + "Yeniden dene" `.btn.tonal`.
+
+**Dalga:** `app.js` içinde tek belge düzeyi `pointerdown` işleyicisi; hedef, 15.2'deki state layer seçici listesine uyan en yakın elemanın içinde `span.ripple` oluşturur. Boyut ve konum CSSOM ile (`style.width/height/left/top`), `background: currentColor`, `opacity .10`, `transform: scale(0)→scale(1)` animasyonu `long1` + `emphasized`, `animationend`'de silinir. `prefers-reduced-motion` ya da `data-motion=reduced` iken üretilmez.
+
+**Onay yardımcısı:** `KRS.confirm(title:string, text:string, okLabel:string): Promise<boolean>` bir `.md-dialog` açıp kapanınca çözülür. Kullanıcı silme ve benzeri yerlerde kullanılır.
+
+**Hesap sayfası (`#/hesap`):** Kartlar `surface-container-low` içinde üç bölüm:
+1. Görünüm:
+   - Tema modu `.segmented` ("Otomatik", "Açık", "Koyu"; `KRS_THEME.setMode`).
+   - Kaynak renk: altı `.swatch` (`button[role="radio"]`, 48px daire, `style.background` CSSOM ile tohum rengi, seçiliyken `check` ikonu), yanında `<input type="color" aria-label="Özel renk">`. Seçim anında `KRS_THEME.setSeed`.
+   - "Hareketi azalt" `switch`.
+2. Parola değiştir (14.5 formu; `.field` x2, `.btn.filled`).
+3. Çıkış `.btn.outlined`.
+
+**Yönetim sayfası:** Kullanıcılar `.list` içinde. Her satırda avatar daire (`primary-container`, ilk harf), ad, "Yönetici" ya da "Kullanıcı" rozeti, sağda "Parolayı sıfırla" (`lock` `.icon-btn`) ve "Sil" (`delete` `.icon-btn`, `KRS.confirm` ile). "Kullanıcı ekle" `.btn.filled` bir dialog açar. Admin kendi satırında silme düğmesi yok.
+
+### 15.7 Okuyucu (sürükleyici)
+
+Ortak:
+- `.reader` kökü `position: fixed; inset: 0` (`body.reading` iken). Arka plan: görsel okuyucuda `#000000` zemin yerine `surface-container-lowest`'in koyu üretimi `generatePalette(seed,true)['surface-container-lowest']` (görsel sayfalar için karanlık zemin); metin okuyucuda seçili okuma temasının `bg` değeri.
+- `.reader-bar.top` (geri oku `arrow_back`, kitap başlığı `title-medium` tek satır, sağda ayar `tune` `.icon-btn`) ve `.reader-bar.bottom` (ilerleme `.progress-linear` + metin "3 / 12" ya da "%42", solda `format_list_bulleted` yalnız metin okuyucuda, sağda `chevron_left`/`chevron_right` `.icon-btn`). Çubuk zeminleri `color-mix(in srgb, var(--md-sys-color-surface) 92%, transparent)`.
+- Çubuklar son kullanıcı girdisinden (`pointermove`, `pointerdown`, `keydown`, `touchstart`, `scroll`) 3000 ms sonra gizlenir: `.reader-bar.hidden` (`opacity: 0; transform: translateY(∓100%)`, geçişin sonunda `visibility: hidden`). `pointermove`, dokunuş ve herhangi bir `keydown` çubukları geri getirir. Odak çubuğun içindeyse ya da alt sayfa açıksa gizlenmez.
+- Alt sayfa: `<dialog class="sheet">`, `showModal()`, alttan kayar (`translateY(100%)→0`, `medium3`, `emphasized-decelerate`), `surface-container-low`, üst köşeler `extra-large`, üstte 32x4 tutamaç çubuğu, yükseklik en çok `70vh`, `>=840px`'te genişlik 480px ortalı. İçerik kaydırılabilir. `Esc` ve arka plana tıklama kapatır.
+- Sayfa/bölüm geçişi: yeni içerik `opacity 0→1` `short4`, `standard`. `reduced motion` iken yok.
+
+Görsel okuyucu (`reader-comic.js`):
+- Alt sayfa "Ayarlar": sığdırma `.segmented` (Genişliğe sığdır, Yüksekliğe sığdır, Sayfaya sığdır, Gerçek boyut). `f` tuşu da döner.
+- Dokunma bölgeleri: sol üçte bir önceki, sağ üçte bir sonraki, orta üçte bir çubukları aç/kapat.
+- `#page-indicator` metni "N / M" alt çubukta (14.6 E kancası).
+
+Metin okuyucu (`reader-text.js`):
+- Alt sayfa "İçindekiler": `.list` içinde bölümler, geçerli olan `secondary-container`.
+- Alt sayfa "Ayarlar": tema `.segmented` (Açık, Koyu, Sepya), yazı boyutu `.slider` (14-28 px, adım 2) ve yanında `A-`/`A+` `.icon-btn`.
+- Tema değerleri `KRS_THEME.readerColors(name, seed)` ile alınır ve çerçeveye `iframe.contentDocument.documentElement.style.setProperty('--bg'|'--fg'|'--link'|'--fs', ...)` ile yazılır. Yazı tipi: `--font: Georgia, "Noto Serif", "DejaVu Serif", serif` (sistem yığını, `font-src` izni gerekmez).
+- `web/frame.css`: `html { background: var(--bg); color: var(--fg); font-size: var(--fs, 18px); font-family: var(--font) }`, `body { max-width: 38rem; margin: 0 auto; padding: 24px 20px 96px; line-height: 1.7 }`, `img { max-width: 100%; height: auto }`, `a { color: var(--link) }`, `h1,h2,h3 { line-height: 1.25 }`. Harici kaynak yok.
+- Çubuk gizleme ebeveyn belge girdi olaylarına ek olarak çerçeve belgesindeki `scroll`, `pointermove` ve `click` olaylarını da dinler (14.2 sonrası aynı kaynak olduğundan engellenmez).
+
+### 15.8 İstatistik, geçmiş (güncellenen sayfa tasarımı)
+
+- `#/istatistik`:
+  - Üstte `.stat-card` ızgarası (5 kart: toplam süre, toplam sayfa, tamamlanan kitap, güncel seri, en uzun seri), kartlar `surface-container-low`, sayı `headline-medium`, etiket `label-medium`, ikon `schedule`/`auto_stories`/`check_circle`/`local_fire_department`/`local_fire_department`.
+  - İki SVG sütun grafiği (30 gün: dakika ve sayfa) `.chart-card` içinde. Çubuklar `fill: var(--md-sys-color-primary)` (CSS sınıfı `.bar`), bugün çubuğu `tertiary`, eksen metinleri `on-surface-variant`, kılavuz çizgileri `outline-variant`. Her çubukta `<title>` ("12 Kas: 34 dk"). Grafik `role="img"` ve `aria-label` özeti ("Son 30 günde günlük okuma süresi").
+  - Yıllık hedef kartı: `.progress-circular` (72px, `done/target`), ortada "3/12", altında `flag` ikonu, `.field` (hedef sayısı) ve `.btn.filled` "Hedefi kaydet". Hedef yoksa metin "Bu yıl için hedef belirleyin".
+- `#/gecmis`: `<ul id="history-table" class="list">` (14.6 E kancası burada `<ul>`'dur, `<table>` değildir). Her `li.list-item`: ilk satır kitap başlığı (`title-medium`), ikinci satır `body-small` "Seri · tarih · süre · sayfa/yüzde", silinmiş kitapta başlığın başında "(silinmiş)" rozeti. Altta "Daha fazla" `.btn.tonal`. Boş durum `.empty`.
+
+### 15.9 Marka
+
+`web/favicon.svg` (kendi çizimimiz, M3 stili): `viewBox="0 0 48 48"`, `<rect width="48" height="48" rx="14" fill="#6750A4"/>` ve beyaz `menu_book` glifi. Glif, 15.5'teki aynı `menu_book` SVG'sinin `d` değeriyle `<g transform="translate(8 8) scale(0.0333) translate(0 960)"><path fill="#fff" d="..."/></g>` biçiminde yerleştirilir. Başka logo yoktur. Uygulama adı arayüzde "kavita-rs" harfleriyle yazı olarak görünür (üst çubuk başlığı ve giriş ekranı).
+
+### 15.10 Görsel doğrulama ve erişilebilirlik (e2e genişlemesi)
+
+`scripts/e2e/package.json` `devDependencies` şu olur: `"@playwright/test": "1.55.0"` ve `"@axe-core/playwright": "4.11.0"`.
+
+`scripts/e2e/reader.spec.mjs` 14.6 E akışına ek olarak ikinci bir test `test('görünüm ve erişilebilirlik', ...)` içerir:
+- Önceki akıştaki kurulum, tarama ve oturum verisi yeniden kullanılır (aynı `describe`, `test.describe.configure({ mode: 'serial' })`).
+- 4 kombinasyon için döngü: `viewport` 360x800 ve 1280x800, `colorScheme` `light` ve `dark`. Her biri için yeni `browser.newContext({ viewport, colorScheme })`, `context.request.post('/api/login', ...)` ile giriş yapılmış, `page.emulateMedia({ colorScheme })`.
+- Altı ekran her kombinasyonda gezilir:
+
+| Ekran adı | Hash rotası | Not |
+|---|---|---|
+| `kutuphane` | `#/` | |
+| `seri` | `#/seri/{id}` | |
+| `okuyucu-cbz` | `#/oku/{cbzId}` | |
+| `okuyucu-epub` | `#/oku/{epubId}` | |
+| `istatistik` | `#/istatistik` | |
+| `hesap` | `#/hesap` | |
+
+- Okuyucu ekranlarında `page.mouse.move(...)` ile çubuklar görünür tutulur ve çekim çubuk görünürken yapılır.
+- Her ekranda `page.screenshot({ path: 'screenshots/<ekran>-<360|1280>-<light|dark>.png', fullPage: false })`. Toplam 24 PNG. Çekimden önce `await page.waitForLoadState('networkidle')` ve ekrana özgü bir beklenen eleman (ör. `[data-testid="series-card"]`, `#page-indicator`, `.chart-card svg`).
+- Her ekranda `new AxeBuilder({ page }).analyze()`; `results.violations.filter(v => v.impact === 'serious' || v.impact === 'critical')` boş olmalıdır, aksi halde test düşer (ihlal `id` ve `help` metni hata mesajına yazılır). Metin okuyucuda çerçeve içeriği de dahildir.
+- Bu test 14.6 E'deki konsol/CSP denetimini de çalıştırır.
+
+CI `e2e` işi (`.github/workflows/ci.yml`) ek adım: `actions/upload-artifact@v4` ile `name: ui-screenshots`, `path: scripts/e2e/screenshots`, `if: always()`, `retention-days: 14`. `scripts/e2e/screenshots/` `.gitignore`'a eklenir. Playwright rapor yükleme adımı (`if: failure()`) kalır.
+
+### 15.11 Görev listesi değişiklikleri (13 ve 14 üzerine)
+
+Sıra: 1, 2, 3, 5, 5b, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 14b, 15, 16, 17, 18, 19, 19b, 20a, 20b, 21, 22. Aynı dosyaya dokunan görevler bu sırada çalışır.
+
+| # | İşçi | Görev | Dosyalar | Bağımlı |
+|---|---|---|---|---|
+| 5 | İŞÇİ-2 | Değişmez (14.1). Yer tutucu `web/*` ve `index.html` kabuğu | | 3 |
+| 5b (YENİ) | İŞÇİ-2 | Varlıkları ekle ve commit/push et. (a) Yeni boş bir dizinde (`mktemp -d`, depo dışı) `curl -fsSL` ile iki woff2 dosyasını ve `LICENSE`'ı 15 başındaki URL'lerden indir, `web/fonts/` altına kopyala (`roboto-flex-latin.woff2`, `roboto-flex-latin-ext.woff2`, `LICENSE`); dosyaların ilk 4 baytı `wOF2` olmalı, değilse görev hata verir. (b) `scripts/build_icons.py`'yi yaz (15.5) ve `python3 -I scripts/build_icons.py web/icons.svg` ile `web/icons.svg` üret; `web/ICONS-LICENSE.txt` yaz. (c) `web/theme.js` için tek satırlık yer tutucu (`// yer tutucu`). (d) `web/index.html` kabuğunu 15.1'deki script/stil sırasıyla güncelle (`theme.js` senkron, head içinde). | `web/fonts/*` `web/icons.svg` `web/ICONS-LICENSE.txt` `web/theme.js` `scripts/build_icons.py` `web/index.html` | 5 |
+| 4 | İŞÇİ-1 | Statik tablo 15.1'e göre (yeni adlar, `/static/{*ad}`, içerik türleri, önbellek başlıkları, `include_bytes!`) | `src/app.rs` | 5b |
+| 11 | İŞÇİ-1 | `GET /api/series` sözleşme değişikliği (15.6): `status` parametresi, `reading_count`, `percent`; test `series_status_filter` | `src/api/library.rs tests/library.rs` | 10 |
+| 14 | İŞÇİ-1 (İŞÇİ-2'den geçti) | `web/style.css`: 15.2 token sistemi, `@font-face`, 15.6/15.7/15.8'de adı geçen bileşenlerin CSS'i ve düzen (rail, bar, grid, card, btn, icon-btn, fab, field, chip, list, dialog, snackbar, progress, segmented, slider, switch, skeleton, empty, ripple, sheet, reader, stat-card, chart-card, swatch), `prefers-reduced-motion` kuralları. `web/frame.css` (15.7). Yalnız kullanılan bileşen için kural yazılır | `web/style.css web/frame.css` | 5b |
+| 14b (YENİ) | İŞÇİ-1 | `web/theme.js` (15.3) ve `web/theme.test.mjs` (15.4); CI `test` işine `node web/theme.test.mjs` adımı (`node --check` döngüsünden sonra) | `web/theme.js web/theme.test.mjs .github/workflows/ci.yml` | 14 |
+| 15 | İŞÇİ-1 | `web/app.js`: kabuk (rail/bar/top bar), router, dalga, `KRS.toast`/`KRS.confirm`, kütüphane (arama, chip'ler, ızgara, FAB, iskelet, boş/hata durumları), seri sayfası (liste, durum diyaloğu), yönetim sayfası, Hesap sayfası (tema/renk/hareket/parola/çıkış). `KRS.todayLocal`, `KRS.api`, `KRS.navigate` aynen 13'teki sözleşme. Kanca adları 14.6 E ve 15.6/15.8 | `web/app.js` | 14b, 13 |
+| 16 | İŞÇİ-1 | `web/tracker.js` değişmez | `web/tracker.js` | 15 |
+| 17 | İŞÇİ-1 | `web/reader-comic.js`: 15.7 ortak ve görsel okuyucu davranışı (otomatik gizlenen çubuklar, alt sayfa ayarları, dokunma bölgeleri, geçiş) | `web/reader-comic.js` | 16 |
+| 18 | İŞÇİ-1 | `web/reader-text.js`: 15.7 ortak ve metin okuyucu davranışı (alt sayfa içindekiler/ayarlar, `readerColors`, slider) | `web/reader-text.js` | 17 |
+| 19 | İŞÇİ-1 | `web/stats.js`: 15.8 (stat kartları, token renkli SVG grafikler, circular progress hedef, `#history-table` `<ul>`) | `web/stats.js` | 18 |
+| 19b | İŞÇİ-1 | 14.6 E e2e işi artı 15.10 (ekran görüntüleri, axe, `ui-screenshots` artifact'ı, `package.json` bağımlılıkları, `.gitignore`) | `scripts/e2e/* .github/workflows/ci.yml .gitignore` | 19 |
+| 20a (20'nin bölünmüş yarısı) | İŞÇİ-1 | `web/index.html` son hali (15.1 sırası, başlık, `lang`, `noscript`, `color-scheme`, erişilebilirlik) ve `web/favicon.svg` (15.9) | `web/index.html web/favicon.svg` | 19b |
+| 20b | İŞÇİ-2 | README gözden geçirme (Hesap sayfasından tema/renk seçimi, ekran görüntüsü artifact'ı, lisans notları: GPL-3.0, Roboto Flex OFL, Material Symbols Apache-2.0) ve `tests/static_files.rs` yeni adları kapsar: her ad 200 ve doğru `Content-Type` (`font/woff2` için ilk 4 bayt `wOF2`, `icons.svg` içinde `<symbol id="menu_book"` var), bilinmeyen ad 404, `/static/theme.test.mjs` 404, `/static/fonts/LICENSE` 404, `index.html` içinde `theme.js` betiğinin diğer betiklerden önce ve `defer`/`async` olmadan geçtiği, CDN bağlantısı (`http://`, `https://`) olmadığı, satır içi `<script>` ve `style=` olmadığı | `README.md tests/static_files.rs` | 20a |
+| 21 | İŞÇİ-2 | Değişmez. Ek olarak `test` işindeki `node web/theme.test.mjs` ve `e2e` işindeki axe ile ekran görüntüsü adımları yeşil olmalı. Hata JS/CSS ile ilgiliyse İŞÇİ-1'e geri gönderilir | | 20b |
+| 22 | İŞÇİ-2 | Değişmez (14.7) | | 21 |
+
+Not: Görev 14'te CSS'in `web/theme.js`'in yazacağı satır içi değişken adlarıyla çakışmaması için tüm renkler yalnız `var(--md-sys-color-*)` olarak kullanılır. CSS içinde onaltılık renk yalnız 15.2'deki JS'siz yedek tabloda bulunur.
+
+Atlananlar/riskler: Hiçbir CSS, JS veya renk formülü çalıştırılmadı. Palet üreticisi yalnız `theme.test.mjs` ile CI'da sınanır. Tablodaki taban çizgisi hex değerleri ve OKLab sabitleri bellekten yazıldı ve doğrulanmadı. Test uyuşmazlık bulursa düzeltme kodda yapılır. `<use href="/static/icons.svg#...">` dış sprite'ın `default-src 'self'` CSP'si altında çalıştığı yalnız e2e ekran görüntüsü ve axe ile görülebilir. Çalışmazsa 15.5 bozulur ve sprite'ın `index.html` içine gömülmesi gerekir. `@axe-core/playwright@4.11.0` ile `@playwright/test@1.55.0` birlikte kullanım uyumu yalnız peer bağımlılık (`playwright-core >= 1.0.0`) üzerinden varsayıldı.
+
+### 15.12 CEO notları
+- `web/index.html` gövdesi: `<div id="app" class="app-shell"></div>` tek bağlama noktasıdır; `app.js` kabuğu buraya kurar, `.snackbar` da onun içinde oluşturulur. `<noscript>` satırı bunun yanındadır.
+- İşçi 2'nin görev 1-5 sapmaları kabul edildi: `version = "0.1.0"`, `smoke.sh` chmod adımları, `image` işinde `test -f Cargo.lock`, `cache-to: type=gha`.
+- Çalışır durumda olana kadar `image`/`e2e` kırmızısı beklenen durumdur; `test` işi her görev sonunda yeşil olmalıdır.
+- Force push yasaktır. Düzeltmeler yeni commit'lerle yapılır.
