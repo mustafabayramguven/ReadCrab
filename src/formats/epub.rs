@@ -4,9 +4,7 @@ use percent_encoding::percent_decode_str;
 use quick_xml::{events::Event, Reader};
 use zip::ZipArchive;
 
-use crate::formats::{
-    FormatError, MAX_CHAPTER_BYTES, MAX_ENTRIES, MAX_TOTAL_BYTES, MAX_XML_BYTES,
-};
+use crate::formats::{FormatError, MAX_CHAPTER_BYTES, MAX_ENTRIES, MAX_TOTAL_BYTES, MAX_XML_BYTES};
 
 #[derive(Clone, Debug)]
 pub struct EpubInfo {
@@ -163,11 +161,7 @@ pub fn epub_chapter_html(path: &Path, info: &EpubInfo, n: usize) -> Result<Strin
     read_zip_string(&mut archive, member, MAX_CHAPTER_BYTES)
 }
 
-pub fn epub_asset(
-    path: &Path,
-    info: &EpubInfo,
-    p: &str,
-) -> Result<(Vec<u8>, String), FormatError> {
+pub fn epub_asset(path: &Path, info: &EpubInfo, p: &str) -> Result<(Vec<u8>, String), FormatError> {
     if p.contains("..") {
         return Err(FormatError::Corrupt);
     }

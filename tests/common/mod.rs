@@ -113,7 +113,7 @@ pub fn make_epub(dir: &Path, name: &str, opts: EpubOpts) -> PathBuf {
 </package>"#
     );
 
-    let nav = br#"<?xml version="1.0" encoding="UTF-8"?>
+    let nav = r#"<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
 <body>
   <nav epub:type="toc">
@@ -126,15 +126,15 @@ pub fn make_epub(dir: &Path, name: &str, opts: EpubOpts) -> PathBuf {
 </body>
 </html>"#;
 
-    let ch1: &[u8] = if opts.svg_cover {
-        br#"<html xmlns="http://www.w3.org/1999/xhtml"><body><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><image xlink:href="images/cover.png" width="100" height="100"/></svg><p>Birinci bölüm metni</p></body></html>"#
+    let ch1 = if opts.svg_cover {
+        r#"<html xmlns="http://www.w3.org/1999/xhtml"><body><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><image xlink:href="images/cover.png" width="100" height="100"/></svg><p>Birinci bölüm metni</p></body></html>"#
     } else {
-        br#"<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>Birinci Bölüm</h1><p>Birinci bölüm metni</p><img src="images/pic.png" alt="pic"/></body></html>"#
+        r#"<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>Birinci Bölüm</h1><p>Birinci bölüm metni</p><img src="images/pic.png" alt="pic"/></body></html>"#
     };
-    let ch2: &[u8] =
-        br#"<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>İkinci Bölüm</h1><p>İkinci bölüm metni</p></body></html>"#;
-    let ch3: &[u8] =
-        br#"<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>Üçüncü Bölüm</h1><p>Üçüncü bölüm metni</p></body></html>"#;
+    let ch2 =
+        r#"<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>İkinci Bölüm</h1><p>İkinci bölüm metni</p></body></html>"#;
+    let ch3 =
+        r#"<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>Üçüncü Bölüm</h1><p>Üçüncü bölüm metni</p></body></html>"#;
 
     let pic_png = png(12, 12, [20, 40, 60]);
     let cover_png = png(60, 90, [100, 150, 200]);
@@ -146,10 +146,10 @@ pub fn make_epub(dir: &Path, name: &str, opts: EpubOpts) -> PathBuf {
         &[
             ("META-INF/container.xml", container.to_vec()),
             ("OEBPS/content.opf", opf.into_bytes()),
-            ("OEBPS/nav.xhtml", nav.to_vec()),
-            ("OEBPS/ch1.xhtml", ch1.to_vec()),
-            ("OEBPS/ch2.xhtml", ch2.to_vec()),
-            ("OEBPS/ch3.xhtml", ch3.to_vec()),
+            ("OEBPS/nav.xhtml", nav.as_bytes().to_vec()),
+            ("OEBPS/ch1.xhtml", ch1.as_bytes().to_vec()),
+            ("OEBPS/ch2.xhtml", ch2.as_bytes().to_vec()),
+            ("OEBPS/ch3.xhtml", ch3.as_bytes().to_vec()),
             ("OEBPS/images/pic.png", pic_png),
             ("OEBPS/images/cover.png", cover_png),
             ("OEBPS/images/unlisted.png", unlisted_png),
@@ -184,7 +184,7 @@ pub fn make_epub_malicious(dir: &Path) -> PathBuf {
   </spine>
 </package>"#;
 
-    let ch1 = br#"<html xmlns="http://www.w3.org/1999/xhtml">
+    let ch1 = r#"<html xmlns="http://www.w3.org/1999/xhtml">
 <body>
   <script>alert('xss')</script>
   <img src="images/pic.png" onerror="alert(1)"/>
@@ -204,7 +204,7 @@ pub fn make_epub_malicious(dir: &Path) -> PathBuf {
         &[
             ("META-INF/container.xml", container.to_vec()),
             ("OEBPS/content.opf", opf.to_vec()),
-            ("OEBPS/ch1.xhtml", ch1.to_vec()),
+            ("OEBPS/ch1.xhtml", ch1.as_bytes().to_vec()),
         ],
     )
 }
