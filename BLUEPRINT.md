@@ -1437,3 +1437,16 @@ Kaynak: şeytanın avukatı raporu + CEO'nun ekran görüntüsü incelemesi. Her
 Her kombinasyon için ayrıca alınır (axe da çalışır): `giris` (oturumsuz), `gecmis` (`#/gecmis`), `yonetim` (`#/yonetim`), `okuyucu-epub-ayarlar` (alt sayfa açık), `okuyucu-comic-ayarlar` (alt sayfa açık), `seri-durum-dialog` (durum diyaloğu açık). Birer kez: `kutuphane-bos` (ilk testte tarama öncesi, 1280 açık), `kurulum` (1280 açık), `kutuphane-yesil` (1280 koyu, `KRS_THEME.setSeed('#2E7D32')` sonrası).
 
 e2e sınamaları güçlenir: 27'deki sıfır çubuk yokluğu ve en az bir veri `rect`'i (`rect:not(.hit)`, sıfır yüksekliksiz); geçmiş satırında süre metni; koyu modda `okuyucu-epub` çerçeve arka planının açık olmadığı (`getComputedStyle` parlaklık < 0.3); 18'deki son bölümde "sonraki" `disabled`; okuyucudan hemen çıkıldığında `body.reading` kalmadığı.
+
+---
+
+## 17. CEO düzeltme turu 2 (önceki bölümlerle çelişirse bu bölüm kazanır)
+
+1. **Bölüm `<title>` metni gövdeye sızıyor (`src/formats/sanitize.rs`).** Ekran görüntüsünde `<title>` metni bölümün başında düz metin görünüyor. `sanitize_chapter`, ammonia'ya `clean_content_tags` içinde `title` dahil ederek (mevcut `script`, `style` korunur) `<title>` içeriğini tamamen atar. MOBI için de geçerlidir. Test (`tests/formats.rs`): `chapter_title_not_in_body`: `<head><title>Sızan Başlık</title></head><body><p>metin</p></body>` temizlenince `Sızan Başlık` yok, `metin` var.
+2. **Metin okuyucu ayarları (`reader-text.js`, `style.css`).** Yazı boyutu satırı tek satırdır: `A-` düğmesi, `.slider` (`flex:1`), `A+` düğmesi, `align-items:center`, her genişlikte. `A-`/`A+` metni `label-large` ve `on-surface` renginde; 48x48 `.icon-btn`.
+3. **Çizgi roman sığdırma (`reader-comic.js`).** Kısa etiketler: `Genişlik`, `Yükseklik`, `Sayfa`, `Gerçek`; `aria-label` tam adlarla ("Genişliğe sığdır" vb.). `.segmented` asla kırılmaz (`flex-wrap:nowrap`, her `.seg-btn` `flex:1 1 0`, `min-width:0`, metin tek satır, 360 px'te seçili `check` ikonu gizlenir). Alt sayfa `#page-indicator` testini etkilemez.
+4. **Sıfır saniyeli oturumlar (`src/api/tracking.rs`, 8.3'ü değiştirir).** Satır yoksa ve `active_seconds == 0` ise `pages_read` ne olursa olsun satır OLUŞTURULMAZ (204). Mevcut satır güncellemesi aynı kalır. `ping_zero_creates_nothing` testi genişletilir: `active_seconds=0, pages_read=1` satır oluşturmaz.
+5. **Geçmiş metni (`stats.js`).** Tarih `Intl.DateTimeFormat('tr-TR',{day:'numeric',month:'short',year:'numeric'})` ile yazılır (`local_date` bileşenlerinden, saat dilimi kaymasız; ör. `8 Kas 2026`). Yüzde: başlangıç ve bitiş aynı yuvarlanıyorsa tek değer (`%67`), değilse `%33 → %67`; yüzde parçası `white-space:nowrap`.
+6. **`kutuphane-bos` ekran görüntüsü (`scripts/e2e/reader.spec.mjs`).** Başlangıç taraması kitapları zaten bulduğu için görüntü boş durumu göstermiyor. Boş durumu ağ düzeyinde üret: `page.route('**/api/series*', r => r.fulfill({json:{total:0,items:[]}}))`, ekran görüntüsünü al ve `.empty` görünürlüğünü doğrula, sonra `unroute`. Aynı yöntemle arama sonuçsuz durumu `kutuphane-sonuc-yok` olarak alınır.
+
+Uygulama adı bu turda DEĞİŞTİRİLMEZ.
