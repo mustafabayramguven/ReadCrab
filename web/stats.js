@@ -114,7 +114,8 @@
     ]);
   }
 
-  async function renderHistory(mount) {
+  async function renderHistory(mount, gen) {
+    var myGen = gen !== undefined ? gen : KRS.routeGen;
     var el = KRS.el;
     var icon = KRS.icon;
     var clearNode = KRS.clearNode;
@@ -132,13 +133,20 @@
 
     var ul = el('ul', { id: 'history-table', className: 'list' });
     var moreWrap = el('div', { className: 'setting-row' });
+    var moreBtn = null;
 
     async function loadPage(firstLoad) {
+      if (!firstLoad && moreBtn) {
+        moreBtn.disabled = true;
+      }
       try {
         var res = await KRS.api(
           'GET',
           '/api/history?limit=' + limit + '&offset=' + offset
         );
+        if (myGen !== undefined && myGen !== KRS.routeGen) {
+          return;
+        }
         if (firstLoad) {
           clearNode(mount);
         }
@@ -196,19 +204,27 @@
 
         offset += items.length;
         clearNode(moreWrap);
+        moreBtn = null;
         if (offset < total) {
-          moreWrap.appendChild(
-            el('button', {
-              type: 'button',
-              className: 'btn tonal',
-              text: 'Daha fazla',
-              onClick: function () {
-                loadPage(false);
-              }
-            })
-          );
+          moreBtn = el('button', {
+            type: 'button',
+            className: 'btn tonal',
+            text: 'Daha fazla',
+            onClick: function () {
+              loadPage(false);
+            }
+          });
+          moreWrap.appendChild(moreBtn);
         }
       } catch (err) {
+        if (myGen !== undefined && myGen !== KRS.routeGen) {
+          return;
+        }
+        if (!firstLoad) {
+          if (moreBtn) moreBtn.disabled = false;
+          if (KRS.toast) KRS.toast(err.message);
+          return;
+        }
         clearNode(mount);
         mount.appendChild(
           el('div', { className: 'empty error' }, [
@@ -220,7 +236,7 @@
               className: 'btn tonal',
               text: 'Yeniden dene',
               onClick: function () {
-                renderHistory(mount);
+                renderHistory(mount, myGen);
               }
             })
           ])
@@ -231,7 +247,8 @@
     await loadPage(true);
   }
 
-  async function renderStats(mount) {
+  async function renderStats(mount, gen) {
+    var myGen = gen !== undefined ? gen : KRS.routeGen;
     var el = KRS.el;
     var icon = KRS.icon;
     var clearNode = KRS.clearNode;
@@ -249,6 +266,9 @@
         'GET',
         '/api/stats?today=' + encodeURIComponent(today)
       );
+      if (myGen !== undefined && myGen !== KRS.routeGen) {
+        return;
+      }
       clearNode(mount);
 
       var statItems = [
@@ -400,6 +420,9 @@
       ]);
       mount.appendChild(goalCard);
     } catch (err) {
+      if (myGen !== undefined && myGen !== KRS.routeGen) {
+        return;
+      }
       clearNode(mount);
       mount.appendChild(
         el('div', { className: 'empty error' }, [
@@ -411,7 +434,7 @@
             className: 'btn tonal',
             text: 'Yeniden dene',
             onClick: function () {
-              renderStats(mount);
+              renderStats(mount, myGen);
             }
           })
         ])

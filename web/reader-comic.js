@@ -27,13 +27,17 @@
     } catch (_) {}
   }
 
-  async function open(book, mount) {
+  async function open(book, mount, gen) {
+    var myGen = gen !== undefined ? gen : KRS.routeGen;
     var el = KRS.el;
     var icon = KRS.icon;
     var clearNode = KRS.clearNode;
     clearNode(mount);
 
     var pagesRes = await KRS.api('GET', '/api/books/' + book.id + '/pages');
+    if (myGen !== undefined && myGen !== KRS.routeGen) {
+      return null;
+    }
     var total = Math.max(1, Number((pagesRes && pagesRes.count) || book.page_count || 1));
     var initialPage = parseInt(book.locator, 10);
     if (!Number.isFinite(initialPage) || initialPage < 0 || initialPage >= total) {
@@ -261,16 +265,48 @@
       }
     }
 
+    var errBox = null;
+    function clearErrBox() {
+      if (errBox && errBox.parentNode) {
+        errBox.parentNode.removeChild(errBox);
+      }
+      errBox = null;
+      pageImg.style.display = '';
+    }
+
     function goToPage(idx, saveProg) {
       var target = Math.max(0, Math.min(total - 1, idx));
-      if (target === curPage && pageImg.getAttribute('src')) return;
+      if (target === curPage && pageImg.getAttribute('src') && !errBox) return;
+      clearErrBox();
       curPage = target;
       var pct = (curPage + 1) / total;
       var pct100 = Math.round(pct * 100);
 
       pageImg.style.opacity = '0';
       pageImg.onload = function () {
+        clearErrBox();
         pageImg.style.opacity = '1';
+      };
+      pageImg.onerror = function () {
+        clearErrBox();
+        pageImg.style.display = 'none';
+        errBox = el('div', { className: 'empty error' }, [
+          icon('error'),
+          el('h2', { text: 'Yüklenemedi' }),
+          el('p', { text: 'Sayfa yüklenemedi.' }),
+          el('button', {
+            type: 'button',
+            className: 'btn tonal',
+            text: 'Yeniden dene',
+            onClick: function (ev) {
+              ev.stopPropagation();
+              clearErrBox();
+              pageImg.removeAttribute('src');
+              goToPage(curPage, saveProg);
+            }
+          })
+        ]);
+        stage.appendChild(errBox);
       };
       pageImg.src = '/api/books/' + book.id + '/pages/' + curPage;
       stage.scrollTop = 0;
@@ -297,6 +333,7 @@
 
     function onKeyDown(e) {
       showBars();
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (sheet.open) {
         if (e.key === 'Escape') {
           sheet.close();
@@ -328,15 +365,29 @@
       }
     }
 
-    var startX = 0;
-    var startY = 0;
+    var startX = null;
+    var startY = null;
     stage.addEventListener('pointerdown', function (e) {
+      if (e.target !== stage && e.target !== pageImg) {
+        startX = null;
+        startY = null;
+        return;
+      }
       startX = e.clientX;
       startY = e.clientY;
     });
+    stage.addEventListener('pointercancel', function () {
+      startX = null;
+      startY = null;
+    });
     stage.addEventListener('pointerup', function (e) {
-      var dx = e.clientX - startX;
-      var dy = e.clientY - startY;
+      if (startX === null || startY === null) return;
+      var sx = startX;
+      var sy = startY;
+      startX = null;
+      startY = null;
+      var dx = e.clientX - sx;
+      var dy = e.clientY - sy;
       if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) {
         if (dx < 0) {
           goToPage(curPage + 1, true);

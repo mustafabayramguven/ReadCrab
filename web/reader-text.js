@@ -46,13 +46,17 @@
     return n < 0 ? 0 : n > 1 ? 1 : n;
   }
 
-  async function open(book, mount) {
+  async function open(book, mount, gen) {
+    var myGen = gen !== undefined ? gen : KRS.routeGen;
     var el = KRS.el;
     var icon = KRS.icon;
     var clearNode = KRS.clearNode;
     clearNode(mount);
 
     var tocRes = await KRS.api('GET', '/api/books/' + book.id + '/toc');
+    if (myGen !== undefined && myGen !== KRS.routeGen) {
+      return null;
+    }
     var chapters = (tocRes && tocRes.chapters) || [];
     var totalChapters = Math.max(1, Number(book.page_count || chapters.length || 1));
     if (chapters.length === 0) {
@@ -493,16 +497,66 @@
       );
     }
 
+    var errBox = null;
+    function clearErrBox() {
+      if (errBox && errBox.parentNode) {
+        errBox.parentNode.removeChild(errBox);
+      }
+      errBox = null;
+      iframe.style.display = '';
+    }
+
+    function updateNavButtons() {
+      prevChBtn.disabled = curChapter <= 0;
+      nextChBtn.disabled = curChapter >= totalChapters - 1;
+    }
+
     function loadChapter(idx, targetRatio, saveProg) {
-      var nextIdx = Math.max(0, Math.min(totalChapters - 1, idx));
-      curChapter = nextIdx;
+      if (idx < 0 || idx >= totalChapters) return;
+      clearErrBox();
+      curChapter = idx;
       curRatio = clamp01(targetRatio);
+      updateNavButtons();
 
       iframe.style.opacity = '0';
       iframe.onload = function () {
+        if (myGen !== undefined && myGen !== KRS.routeGen) return;
+        var doc = iframe.contentDocument;
+        if (!doc || doc.contentType !== 'text/html') {
+          var errMsg = 'Bölüm yüklenemedi.';
+          if (doc && doc.body) {
+            try {
+              var errJson = JSON.parse(doc.body.textContent || '');
+              if (errJson && errJson.error === 'unauthorized') {
+                if (KRS.navigate) KRS.navigate('#/giris');
+                return;
+              }
+              if (errJson && errJson.message) {
+                errMsg = errJson.message;
+              }
+            } catch (_) {}
+          }
+          clearErrBox();
+          iframe.style.display = 'none';
+          errBox = el('div', { className: 'empty error' }, [
+            icon('error'),
+            el('h2', { text: 'Yüklenemedi' }),
+            el('p', { text: errMsg }),
+            el('button', {
+              type: 'button',
+              className: 'btn tonal',
+              text: 'Yeniden dene',
+              onClick: function () {
+                clearErrBox();
+                loadChapter(curChapter, curRatio, saveProg);
+              }
+            })
+          ]);
+          stage.appendChild(errBox);
+          return;
+        }
         applyFrameStyles();
         bindFrameEvents();
-        var doc = iframe.contentDocument;
         var se = doc && (doc.scrollingElement || doc.documentElement || doc.body);
         if (se) {
           restoringScroll = true;
@@ -534,6 +588,7 @@
 
     function handleKey(e) {
       showBars();
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (tocSheet.open) {
         if (e.key === 'Escape') tocSheet.close();
         return;
@@ -544,12 +599,22 @@
       }
       var doc = iframe.contentDocument;
       var se = doc && (doc.scrollingElement || doc.documentElement || doc.body);
-      if (e.key === '[') {
+      if (e.key === '[' || e.key === 'ArrowLeft') {
         e.preventDefault();
         loadChapter(curChapter - 1, 0, true);
-      } else if (e.key === ']') {
+      } else if (e.key === ']' || e.key === 'ArrowRight') {
         e.preventDefault();
         loadChapter(curChapter + 1, 0, true);
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        if (se) {
+          se.scrollTop += 60;
+        }
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (se) {
+          se.scrollTop -= 60;
+        }
       } else if (e.key === 'PageDown' || (e.key === ' ' && !e.shiftKey)) {
         e.preventDefault();
         if (se) {

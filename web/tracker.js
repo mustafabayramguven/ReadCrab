@@ -57,7 +57,13 @@
       keepalive: Boolean(keepalive),
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
-    }).catch(function () {});
+    })
+      .then(function (res) {
+        if (res && res.status === 401 && KRS.navigate) {
+          KRS.navigate('#/giris');
+        }
+      })
+      .catch(function () {});
   }
 
   function sendPingBeacon(s) {
@@ -78,7 +84,6 @@
     }
     if (!pendingProgress) return;
     var p = pendingProgress;
-    pendingProgress = null;
     fetch('/api/books/' + encodeURIComponent(p.bookId) + '/progress', {
       method: 'PUT',
       credentials: 'same-origin',
@@ -87,9 +92,19 @@
       body: JSON.stringify({
         locator: String(p.locator),
         percent: clamp01(p.percent),
-        local_date: p.localDate
+        local_date: localDateStr()
       })
-    }).catch(function () {});
+    })
+      .then(function (res) {
+        if (res && res.ok) {
+          if (pendingProgress === p) {
+            pendingProgress = null;
+          }
+        } else if (res && res.status === 401 && KRS.navigate) {
+          KRS.navigate('#/giris');
+        }
+      })
+      .catch(function () {});
   }
 
   function scheduleProgress(bookId, locator, percent) {
@@ -101,7 +116,7 @@
       bookId: bookId,
       locator: String(locator),
       percent: pct,
-      localDate: session ? session.localDate : localDateStr()
+      localDate: localDateStr()
     };
     if (progTimer) clearTimeout(progTimer);
     progTimer = setTimeout(function () {
@@ -163,7 +178,7 @@
     session = {
       clientId: randomClientId(),
       bookId: Number(bookId),
-      activeSeconds: 1,
+      activeSeconds: 0,
       pages: new Set(),
       startPercent: sp,
       endPercent: sp,
@@ -178,11 +193,17 @@
         Date.now() - session.lastInputAt <= 60000
       ) {
         session.activeSeconds += 1;
+        if (session.activeSeconds === 1) {
+          scheduleQuickPing();
+        }
       }
     }, 1000);
 
     pingTimer = setInterval(function () {
       if (!session) return;
+      if (pendingProgress && !progTimer) {
+        flushProgress(false);
+      }
       sendPingFetch(session, false);
     }, 15000);
   }
@@ -203,8 +224,11 @@
   }
 
   document.addEventListener('visibilitychange', function () {
-    if (document.visibilityState === 'hidden' && session) {
-      sendPingBeacon(session);
+    if (document.visibilityState === 'hidden') {
+      flushProgress(true);
+      if (session) {
+        sendPingBeacon(session);
+      }
     }
   });
 

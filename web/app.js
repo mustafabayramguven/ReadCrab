@@ -5,6 +5,7 @@
   var KRS = (window.KRS = window.KRS || {});
   KRS.readers = KRS.readers || {};
   KRS.me = null;
+  KRS.routeGen = 0;
 
   var activeCleanup = null;
   var scanPollTimer = null;
@@ -555,14 +556,18 @@
   }
 
   // Giriş sayfası (#/giris)
-  async function renderLogin() {
+  async function renderLogin(gen) {
+    var myGen = gen !== undefined ? gen : KRS.routeGen;
     try {
       var st = await api('GET', '/api/setup-status');
+      if (myGen !== KRS.routeGen) return;
       if (st && st.needs_setup) {
         navigate('#/kurulum');
         return;
       }
-    } catch (_) {}
+    } catch (_) {
+      if (myGen !== KRS.routeGen) return;
+    }
 
     shell.classList.add('auth-only');
     clearNode(mainPage);
@@ -615,7 +620,9 @@
   }
 
   // Kütüphane (#/)
-  function renderLibrary() {
+  function renderLibrary(gen) {
+    var myGen = gen !== undefined ? gen : KRS.routeGen;
+    var active = true;
     setTopBar({ title: 'kavita-rs' });
     clearNode(mainPage);
 
@@ -625,6 +632,22 @@
       status: 'all'
     };
     var debounceId = null;
+    var limit = 60;
+    var offset = 0;
+    var total = 0;
+    var seq = 0;
+    var loading = false;
+    var grid = null;
+    var moreWrap = el('div', { className: 'setting-row' });
+    var moreBtn = null;
+    var observer = null;
+
+    function disconnectObserver() {
+      if (observer) {
+        observer.disconnect();
+        observer = null;
+      }
+    }
 
     var searchInput = el('input', {
       type: 'search',
@@ -799,9 +822,14 @@
     }
 
     function pollScan(notifyWhenDone) {
-      if (scanPollTimer) clearTimeout(scanPollTimer);
+      if (scanPollTimer) {
+        clearTimeout(scanPollTimer);
+        scanPollTimer = null;
+      }
+      if (!active || myGen !== KRS.routeGen) return;
       api('GET', '/api/scan-status')
         .then(function (st) {
+          if (!active || myGen !== KRS.routeGen) return;
           updateFabStatus(st);
           if (st && st.running) {
             scanPollTimer = setTimeout(function () {
@@ -809,19 +837,69 @@
             }, 400);
           } else if (notifyWhenDone) {
             toast('Tarama tamamlandı');
-            loadSeries();
+            loadSeries(true);
           }
         })
         .catch(function () {});
     }
 
-    async function loadSeries() {
-      clearNode(contentArea);
-      var skelGrid = el('div', { className: 'grid' });
-      for (var s = 0; s < 6; s++) {
-        skelGrid.appendChild(el('div', { className: 'skeleton skeleton-card' }));
+    function appendSeriesCards(items) {
+      for (var i = 0; i < items.length; i++) {
+        var it = items[i];
+        var coverChildren = [
+          makeCoverNode(it.cover_book_id, it.name),
+          createLinearProgress(it.percent || 0, it.name + ' okuma ilerlemesi')
+        ];
+        if (it.book_count > 0 && it.read_count === it.book_count) {
+          coverChildren.push(el('span', { className: 'badge', text: 'Bitti' }));
+        } else if (
+          it.reading_count > 0 ||
+          (it.read_count > 0 && it.read_count < it.book_count)
+        ) {
+          coverChildren.push(el('span', { className: 'badge', text: 'Okunuyor' }));
+        }
+        var card = el(
+          'a',
+          {
+            href: '#/seri/' + it.id,
+            className: 'card',
+            'data-testid': 'series-card'
+          },
+          [
+            el('div', { className: 'cover' }, coverChildren),
+            el('div', { className: 'card-body' }, [
+              el('h2', { className: 'card-title', text: it.name }),
+              el('p', { className: 'card-meta', text: it.book_count + ' cilt' })
+            ])
+          ]
+        );
+        grid.appendChild(card);
       }
-      contentArea.appendChild(skelGrid);
+    }
+
+    async function loadSeries(reset) {
+      var isReset = reset !== false;
+      if (!isReset) {
+        if (loading || offset >= total) return;
+        if (moreBtn) moreBtn.disabled = true;
+      } else {
+        disconnectObserver();
+        offset = 0;
+        total = 0;
+        grid = null;
+        moreBtn = null;
+        clearNode(moreWrap);
+        clearNode(contentArea);
+        var skelGrid = el('div', { className: 'grid' });
+        for (var s = 0; s < 6; s++) {
+          skelGrid.appendChild(el('div', { className: 'skeleton skeleton-card' }));
+        }
+        contentArea.appendChild(skelGrid);
+      }
+
+      loading = true;
+      var mySeq = ++seq;
+      var reqOffset = isReset ? 0 : offset;
 
       var qs =
         '?q=' +
@@ -830,83 +908,97 @@
         encodeURIComponent(state.sort) +
         '&status=' +
         encodeURIComponent(state.status) +
-        '&limit=60&offset=0';
+        '&limit=' +
+        limit +
+        '&offset=' +
+        reqOffset;
 
       try {
         var res = await api('GET', '/api/series' + qs);
-        clearNode(contentArea);
+        if (!active || myGen !== KRS.routeGen || mySeq !== seq) return;
+        loading = false;
         var items = (res && res.items) || [];
-        if (items.length === 0) {
-          if (state.q || state.status !== 'all') {
-            contentArea.appendChild(
-              el('div', { className: 'empty' }, [
-                icon('search'),
-                el('h2', { text: 'Sonuç bulunamadı' }),
-                el('p', { text: 'Başka bir arama deneyin.' })
-              ])
-            );
-          } else {
-            var emptyChildren = [
-              icon('menu_book'),
-              el('h2', { text: 'Kütüphane boş' }),
-              el('p', {
-                text: '/books klasörüne seri klasörleri ekleyin ve ardından tarayın.'
-              })
-            ];
-            if (KRS.me && KRS.me.is_admin) {
-              emptyChildren.push(
-                el(
-                  'button',
-                  {
-                    type: 'button',
-                    className: 'btn tonal',
-                    text: 'Kütüphaneyi tara',
-                    onClick: function () {
-                      triggerScan();
-                    }
-                  }
-                )
+        total = Number((res && res.total) || 0);
+
+        if (isReset) {
+          clearNode(contentArea);
+          if (items.length === 0) {
+            if (state.q || state.status !== 'all') {
+              contentArea.appendChild(
+                el('div', { className: 'empty' }, [
+                  icon('search'),
+                  el('h2', { text: 'Sonuç bulunamadı' }),
+                  el('p', { text: 'Başka bir arama deneyin.' })
+                ])
               );
+            } else {
+              var emptyChildren = [
+                icon('menu_book'),
+                el('h2', { text: 'Kütüphane boş' }),
+                el('p', {
+                  text: '/books klasörüne seri klasörleri ekleyin ve ardından tarayın.'
+                })
+              ];
+              if (KRS.me && KRS.me.is_admin) {
+                emptyChildren.push(
+                  el(
+                    'button',
+                    {
+                      type: 'button',
+                      className: 'btn tonal',
+                      text: 'Kütüphaneyi tara',
+                      onClick: function () {
+                        triggerScan();
+                      }
+                    }
+                  )
+                );
+              }
+              contentArea.appendChild(el('div', { className: 'empty' }, emptyChildren));
             }
-            contentArea.appendChild(el('div', { className: 'empty' }, emptyChildren));
+            return;
           }
-          return;
+          grid = el('div', { className: 'grid' });
+          contentArea.appendChild(grid);
+          contentArea.appendChild(moreWrap);
         }
 
-        var grid = el('div', { className: 'grid' });
-        for (var i = 0; i < items.length; i++) {
-          var it = items[i];
-          var coverChildren = [
-            makeCoverNode(it.cover_book_id, it.name),
-            createLinearProgress(it.percent || 0, it.name + ' okuma ilerlemesi')
-          ];
-          if (it.book_count > 0 && it.read_count === it.book_count) {
-            coverChildren.push(el('span', { className: 'badge', text: 'Bitti' }));
-          } else if (
-            it.reading_count > 0 ||
-            (it.read_count > 0 && it.read_count < it.book_count)
-          ) {
-            coverChildren.push(el('span', { className: 'badge', text: 'Okunuyor' }));
+        appendSeriesCards(items);
+        offset = reqOffset + items.length;
+        disconnectObserver();
+        clearNode(moreWrap);
+        moreBtn = null;
+
+        if (offset < total) {
+          moreBtn = el('button', {
+            type: 'button',
+            className: 'btn tonal',
+            text: 'Daha fazla',
+            onClick: function () {
+              loadSeries(false);
+            }
+          });
+          moreWrap.appendChild(moreBtn);
+          if (typeof IntersectionObserver !== 'undefined') {
+            observer = new IntersectionObserver(function (entries) {
+              for (var eIdx = 0; eIdx < entries.length; eIdx++) {
+                if (entries[eIdx].isIntersecting) {
+                  loadSeries(false);
+                  break;
+                }
+              }
+            });
+            observer.observe(moreBtn);
           }
-          var card = el(
-            'a',
-            {
-              href: '#/seri/' + it.id,
-              className: 'card',
-              'data-testid': 'series-card'
-            },
-            [
-              el('div', { className: 'cover' }, coverChildren),
-              el('div', { className: 'card-body' }, [
-                el('h2', { className: 'card-title', text: it.name }),
-                el('p', { className: 'card-meta', text: it.book_count + ' cilt' })
-              ])
-            ]
-          );
-          grid.appendChild(card);
         }
-        contentArea.appendChild(grid);
       } catch (err) {
+        if (!active || myGen !== KRS.routeGen || mySeq !== seq) return;
+        loading = false;
+        if (!isReset) {
+          if (moreBtn) moreBtn.disabled = false;
+          toast(err.message);
+          return;
+        }
         clearNode(contentArea);
         contentArea.appendChild(
           el('div', { className: 'empty error' }, [
@@ -918,7 +1010,7 @@
               className: 'btn tonal',
               text: 'Yeniden dene',
               onClick: function () {
-                loadSeries();
+                loadSeries(true);
               }
             })
           ])
@@ -926,12 +1018,17 @@
       }
     }
 
-    loadSeries();
+    loadSeries(true);
     pollScan(false);
 
     setCleanup(function () {
+      active = false;
       if (debounceId) clearTimeout(debounceId);
-      if (scanPollTimer) clearTimeout(scanPollTimer);
+      if (scanPollTimer) {
+        clearTimeout(scanPollTimer);
+        scanPollTimer = null;
+      }
+      disconnectObserver();
     });
   }
 
@@ -1017,7 +1114,8 @@
   }
 
   // Seri sayfası (#/seri/{id})
-  async function renderSeries(seriesId) {
+  async function renderSeries(seriesId, gen) {
+    var myGen = gen !== undefined ? gen : KRS.routeGen;
     setTopBar({ title: 'Seri', backHash: '#/' });
     clearNode(mainPage);
 
@@ -1029,6 +1127,7 @@
 
     try {
       var data = await api('GET', '/api/series/' + encodeURIComponent(seriesId));
+      if (myGen !== KRS.routeGen) return;
       setTopBar({ title: data.name, backHash: '#/' });
       clearNode(mainPage);
 
@@ -1077,7 +1176,7 @@
               onClick: function (e) {
                 e.stopPropagation();
                 openBookStatusDialog(b, function () {
-                  renderSeries(seriesId);
+                  renderSeries(seriesId, myGen);
                 });
               }
             },
@@ -1094,6 +1193,7 @@
       }
       mainPage.appendChild(list);
     } catch (err) {
+      if (myGen !== KRS.routeGen) return;
       clearNode(mainPage);
       mainPage.appendChild(
         el('div', { className: 'empty error' }, [
@@ -1105,7 +1205,7 @@
             className: 'btn tonal',
             text: 'Yeniden dene',
             onClick: function () {
-              renderSeries(seriesId);
+              renderSeries(seriesId, myGen);
             }
           })
         ])
@@ -1114,12 +1214,19 @@
   }
 
   // Okuyucu (#/oku/{bookId})
-  async function renderReader(bookId) {
+  async function renderReader(bookId, gen) {
+    var myGen = gen !== undefined ? gen : KRS.routeGen;
     document.body.classList.add('reading');
     clearNode(mainPage);
 
     try {
       var book = await api('GET', '/api/books/' + encodeURIComponent(bookId));
+      if (myGen !== KRS.routeGen) {
+        if ((location.hash || '').indexOf('#/oku/') !== 0) {
+          document.body.classList.remove('reading');
+        }
+        return;
+      }
       if (book.error) {
         document.body.classList.remove('reading');
         setTopBar({ title: book.title, backHash: '#/seri/' + book.series_id });
@@ -1145,16 +1252,36 @@
 
       if (isComicFormat(book.format)) {
         if (KRS.readers.comic && typeof KRS.readers.comic.open === 'function') {
-          var cleanupComic = await KRS.readers.comic.open(book, mainPage);
+          var cleanupComic = await KRS.readers.comic.open(book, mainPage, myGen);
+          if (myGen !== KRS.routeGen) {
+            if (typeof cleanupComic === 'function') cleanupComic();
+            if ((location.hash || '').indexOf('#/oku/') !== 0) {
+              document.body.classList.remove('reading');
+            }
+            return;
+          }
           setCleanup(cleanupComic);
         }
       } else {
         if (KRS.readers.text && typeof KRS.readers.text.open === 'function') {
-          var cleanupText = await KRS.readers.text.open(book, mainPage);
+          var cleanupText = await KRS.readers.text.open(book, mainPage, myGen);
+          if (myGen !== KRS.routeGen) {
+            if (typeof cleanupText === 'function') cleanupText();
+            if ((location.hash || '').indexOf('#/oku/') !== 0) {
+              document.body.classList.remove('reading');
+            }
+            return;
+          }
           setCleanup(cleanupText);
         }
       }
     } catch (err) {
+      if (myGen !== KRS.routeGen) {
+        if ((location.hash || '').indexOf('#/oku/') !== 0) {
+          document.body.classList.remove('reading');
+        }
+        return;
+      }
       document.body.classList.remove('reading');
       setTopBar({ title: 'Okuyucu', backHash: '#/' });
       mainPage.appendChild(
@@ -1384,7 +1511,8 @@
   }
 
   // Yönetim sayfası (#/yonetim)
-  async function renderAdmin() {
+  async function renderAdmin(gen) {
+    var myGen = gen !== undefined ? gen : KRS.routeGen;
     if (!KRS.me || !KRS.me.is_admin) {
       navigate('#/');
       return;
@@ -1556,6 +1684,7 @@
       clearNode(listWrap);
       try {
         var users = await api('GET', '/api/admin/users');
+        if (myGen !== KRS.routeGen) return;
         var ul = el('ul', { className: 'list' });
         for (var i = 0; i < users.length; i++) {
           (function (u) {
@@ -1621,6 +1750,7 @@
         }
         listWrap.appendChild(ul);
       } catch (err) {
+        if (myGen !== KRS.routeGen) return;
         toast(err.message);
       }
     }
@@ -1629,6 +1759,7 @@
   }
 
   async function handleRoute() {
+    var gen = ++KRS.routeGen;
     setCleanup(null);
     if (KRS.tracker && typeof KRS.tracker.stop === 'function') {
       KRS.tracker.stop();
@@ -1641,19 +1772,22 @@
       return;
     }
     if (hash === '#/giris') {
-      await renderLogin();
+      await renderLogin(gen);
       return;
     }
 
     if (!KRS.me) {
       try {
         var st = await api('GET', '/api/setup-status');
+        if (gen !== KRS.routeGen) return;
         if (st && st.needs_setup) {
           navigate('#/kurulum');
           return;
         }
         KRS.me = await api('GET', '/api/me');
+        if (gen !== KRS.routeGen) return;
       } catch (_) {
+        if (gen !== KRS.routeGen) return;
         navigate('#/giris');
         return;
       }
@@ -1663,25 +1797,25 @@
     renderNav(hash);
 
     if (hash === '#/' || hash === '#') {
-      renderLibrary();
+      renderLibrary(gen);
     } else if (hash.indexOf('#/seri/') === 0) {
-      renderSeries(hash.slice('#/seri/'.length));
+      renderSeries(hash.slice('#/seri/'.length), gen);
     } else if (hash.indexOf('#/oku/') === 0) {
-      await renderReader(hash.slice('#/oku/'.length));
+      await renderReader(hash.slice('#/oku/'.length), gen);
     } else if (hash === '#/gecmis') {
       setTopBar({ title: 'Geçmiş' });
       if (KRS.stats && typeof KRS.stats.renderHistory === 'function') {
-        KRS.stats.renderHistory(mainPage);
+        KRS.stats.renderHistory(mainPage, gen);
       }
     } else if (hash === '#/istatistik') {
       setTopBar({ title: 'İstatistik' });
       if (KRS.stats && typeof KRS.stats.renderStats === 'function') {
-        KRS.stats.renderStats(mainPage);
+        KRS.stats.renderStats(mainPage, gen);
       }
     } else if (hash === '#/hesap') {
       renderAccount();
     } else if (hash === '#/yonetim') {
-      await renderAdmin();
+      await renderAdmin(gen);
     } else {
       navigate('#/');
     }
