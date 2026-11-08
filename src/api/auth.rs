@@ -4,7 +4,7 @@ use axum::{
     extract::{ConnectInfo, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{get, post, put},
     Json, Router,
 };
 use rusqlite::OptionalExtension;
@@ -27,6 +27,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/login", post(login))
         .route("/api/logout", post(logout))
         .route("/api/me", get(me))
+        .route("/api/me/password", put(change_password))
 }
 
 #[derive(Serialize)]
@@ -204,4 +205,66 @@ async fn me(user: AuthUser) -> Json<UserRes> {
         username: user.username,
         is_admin: user.is_admin,
     })
+}
+
+#[derive(Deserialize)]
+struct ChangePasswordReq {
+    current_password: String,
+    new_password: String,
+}
+
+async fn change_password(
+    user: AuthUser,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    JsonBody(req): JsonBody<ChangePasswordReq>,
+) -> Result<StatusCode, AppError> {
+    validate_password(&req.new_password)?;
+
+    if let Err(retry_after) = state.limiter.check(&user.username, addr.ip()) {
+        return Err(AppError::TooManyAttempts { retry_after });
+    }
+
+    let uid = user.id;
+    let pw_hash: String = state
+        .db
+        .run(move |conn| {
+            conn.query_row(
+                "SELECT password_hash FROM users WHERE id = ?1",
+                rusqlite::params![uid],
+                |r| r.get(0),
+            )
+            .map_err(AppError::from)
+        })
+        .await?;
+
+    if !verify_password(req.current_password, pw_hash).await {
+        state.limiter.fail(&user.username, addr.ip());
+        return Err(AppError::Unauthorized);
+    }
+
+    state.limiter.ok(&user.username);
+
+    let new_hash = hash_password(req.new_password).await?;
+    let current_thash = extract_session_token(&headers)
+        .map(|t| token_hash(&t))
+        .unwrap_or_default();
+
+    state
+        .db
+        .run(move |conn| {
+            conn.execute(
+                "UPDATE users SET password_hash = ?1 WHERE id = ?2",
+                rusqlite::params![new_hash, uid],
+            )?;
+            conn.execute(
+                "DELETE FROM sessions WHERE user_id = ?1 AND token_hash <> ?2",
+                rusqlite::params![uid, current_thash],
+            )?;
+            Ok(())
+        })
+        .await?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
