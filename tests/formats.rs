@@ -306,3 +306,13 @@ fn mobi_drm_flag() {
     let res = mobi_open(&drm_path);
     assert!(matches!(res, Err(FormatError::Drm)));
 }
+
+#[test]
+fn chapter_title_not_in_body() {
+    let raw = "<head><title>Sızan Başlık</title></head><body><p>metin</p></body>";
+    for mode in [SrcMode::Epub, SrcMode::Mobi] {
+        let clean = sanitize_chapter(raw, 1, "", mode);
+        assert!(!clean.contains("Sızan Başlık"));
+        assert!(clean.contains("metin"));
+    }
+}

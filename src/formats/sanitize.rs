@@ -167,6 +167,7 @@ pub fn sanitize_chapter(raw_html: &str, book_id: i64, chapter_dir: &str, mode: S
     let ch_dir = chapter_dir.to_string();
     let mut builder = Builder::default();
     builder
+        .clean_content_tags(HashSet::from(["script", "style", "title"]))
         .url_schemes(HashSet::from(["http", "https", "mailto"]))
         .link_rel(Some("noopener noreferrer"))
         .url_relative(UrlRelative::PassThrough)
