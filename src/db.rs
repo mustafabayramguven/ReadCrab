@@ -25,8 +25,7 @@ impl Db {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
 
-        let user_version: i32 =
-            conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        let user_version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
         if user_version < 1 {
             let tx = conn.transaction()?;
             tx.execute_batch(MIGRATION_0001)?;

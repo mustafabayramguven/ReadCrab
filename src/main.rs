@@ -6,7 +6,7 @@ use std::{
 };
 
 use kavita_rs::{
-    app::{AppState, build_app},
+    app::{build_app, AppState},
     config::Config,
     db::Db,
 };
@@ -74,10 +74,12 @@ async fn main() {
     let app = build_app(state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap_or_else(|e| {
-        tracing::error!("port dinlenemedi ({addr}): {e}");
-        std::process::exit(1);
-    });
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::error!("port dinlenemedi ({addr}): {e}");
+            std::process::exit(1);
+        });
 
     tracing::info!("kavita-rs dinliyor: {addr}");
     if let Err(e) = axum::serve(

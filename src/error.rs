@@ -1,6 +1,6 @@
 use axum::{
-    extract::{FromRequest, Request, rejection::JsonRejection},
-    http::{StatusCode, header},
+    extract::{rejection::JsonRejection, FromRequest, Request},
+    http::{header, StatusCode},
     response::{IntoResponse, Response},
 };
 use serde::Serialize;
@@ -133,9 +133,7 @@ where
             Ok(axum::Json(val)) => Ok(JsonBody(val)),
             Err(rejection) => match rejection {
                 JsonRejection::MissingJsonContentType(_) => Err(AppError::UnsupportedMedia),
-                JsonRejection::BytesRejection(b)
-                    if b.status() == StatusCode::PAYLOAD_TOO_LARGE =>
-                {
+                JsonRejection::BytesRejection(b) if b.status() == StatusCode::PAYLOAD_TOO_LARGE => {
                     Err(AppError::PayloadTooLarge)
                 }
                 _ => Err(AppError::BadRequest("Geçersiz JSON gövdesi.")),

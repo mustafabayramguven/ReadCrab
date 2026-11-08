@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
 use axum::{
-    Router,
     extract::{DefaultBodyLimit, Path, Request, State},
-    http::{HeaderValue, StatusCode, header},
+    http::{header, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::get,
+    Router,
 };
 use tower_http::catch_panic::CatchPanicLayer;
 
@@ -41,7 +41,9 @@ pub fn build_app(state: AppState) -> Router {
         .route("/static/{*ad}", get(static_handler))
         .layer(DefaultBodyLimit::max(64 * 1024))
         .layer(middleware::from_fn(security_headers))
-        .layer(CatchPanicLayer::custom(|_| AppError::Internal.into_response()))
+        .layer(CatchPanicLayer::custom(|_| {
+            AppError::Internal.into_response()
+        }))
         .with_state(state)
 }
 
@@ -156,9 +158,7 @@ async fn static_handler(Path(ad): Path<String>) -> Result<Response, AppError> {
                 "image/svg+xml",
                 "public, max-age=86400",
             ),
-            "fonts/roboto-flex-latin.woff2" => {
-                (FONT_LATIN, "font/woff2", "public, max-age=86400")
-            }
+            "fonts/roboto-flex-latin.woff2" => (FONT_LATIN, "font/woff2", "public, max-age=86400"),
             "fonts/roboto-flex-latin-ext.woff2" => {
                 (FONT_LATIN_EXT, "font/woff2", "public, max-age=86400")
             }
