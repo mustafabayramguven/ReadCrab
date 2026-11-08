@@ -1354,21 +1354,29 @@ dialog.sheet[open] {
 
 /* Segmented, Slider, Switch, Swatch (15.6) */
 .segmented {
-  display: inline-flex;
-  flex-wrap: wrap;
+  display: flex;
+  flex-wrap: nowrap;
   border: 1px solid var(--md-sys-color-outline);
   border-radius: var(--md-sys-shape-corner-full);
   overflow: hidden;
+  width: 100%;
   max-width: 100%;
+}
+
+.setting-row > .segmented {
+  flex: 1 1 220px;
+  max-width: 360px;
 }
 
 .seg-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex: 1 1 0;
+  min-width: 0;
   gap: 6px;
   height: 40px;
-  padding: 0 14px;
+  padding: 0 10px;
   border: none;
   border-right: 1px solid var(--md-sys-color-outline);
   background: transparent;
@@ -1377,6 +1385,7 @@ dialog.sheet[open] {
   font-size: var(--md-sys-typescale-label-large-size);
   line-height: var(--md-sys-typescale-label-large-line);
   font-weight: var(--md-sys-typescale-label-large-weight);
+  white-space: nowrap;
   cursor: pointer;
 }
 
@@ -1392,6 +1401,16 @@ dialog.sheet[open] {
 .seg-btn .icon {
   width: 18px;
   height: 18px;
+}
+
+@media (max-width: 480px) {
+  .seg-btn {
+    padding: 0 6px;
+  }
+
+  .seg-btn .icon {
+    display: none;
+  }
 }
 
 .slider {

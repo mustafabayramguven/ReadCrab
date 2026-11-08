@@ -5,10 +5,10 @@
   KRS.readers = KRS.readers || {};
 
   var FIT_MODES = [
-    { key: 'width', label: 'Genişliğe sığdır' },
-    { key: 'height', label: 'Yüksekliğe sığdır' },
-    { key: 'page', label: 'Sayfaya sığdır' },
-    { key: 'actual', label: 'Gerçek boyut' }
+    { key: 'width', label: 'Genişlik', ariaLabel: 'Genişliğe sığdır' },
+    { key: 'height', label: 'Yükseklik', ariaLabel: 'Yüksekliğe sığdır' },
+    { key: 'page', label: 'Sayfa', ariaLabel: 'Sayfaya sığdır' },
+    { key: 'actual', label: 'Gerçek', ariaLabel: 'Gerçek boyut' }
   ];
 
   function getSavedFit() {
@@ -194,6 +194,7 @@
                 type: 'button',
                 className: 'seg-btn',
                 role: 'radio',
+                'aria-label': m.ariaLabel,
                 'aria-checked': sel ? 'true' : 'false',
                 onClick: function () {
                   applyFit(m.key);
