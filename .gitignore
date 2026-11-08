@@ -1,2 +1,5 @@
 target/
 data/
+scripts/e2e/screenshots/
+scripts/e2e/node_modules/
+scripts/e2e/test-results/

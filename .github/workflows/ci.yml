@@ -46,8 +46,60 @@ jobs:
           cache-to: type=gha
       - run: bash scripts/smoke.sh kavita-rs:ci
 
-  publish:
+  e2e:
     needs: image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: test -f Cargo.lock
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          push: false
+          load: true
+          tags: kavita-rs:ci
+          platforms: linux/amd64
+          cache-from: type=gha
+      - run: |
+          docker volume create e2e-data
+          mkdir /tmp/e2e-books
+          python3 -I scripts/e2e/make_books.py /tmp/e2e-books
+          docker run -d --name e2e -p 3435:3435 -v e2e-data:/data -v /tmp/e2e-books:/books:ro kavita-rs:ci
+          for i in $(seq 1 30); do
+            if [ "$(curl -fsS http://127.0.0.1:3435/health 2>/dev/null || true)" = "ok" ]; then
+              break
+            fi
+            sleep 1
+          done
+          [ "$(curl -fsS http://127.0.0.1:3435/health)" = "ok" ]
+      - run: |
+          cd scripts/e2e
+          npm install --no-audit --no-fund
+          npx playwright install --with-deps chromium
+          npx playwright test
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-screenshots
+          path: scripts/e2e/screenshots
+          retention-days: 14
+      - if: failure()
+        run: docker logs e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: e2e-test-results
+          path: scripts/e2e/test-results
+      - if: always()
+        run: |
+          docker rm -f e2e || true
+          docker volume rm e2e-data || true
+
+  publish:
+    needs: [image, e2e]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
