@@ -1111,6 +1111,10 @@ body.reading main.page {
   overflow-wrap: break-word;
 }
 
+.nowrap {
+  white-space: nowrap;
+}
+
 .avatar {
   width: 40px;
   height: 40px;

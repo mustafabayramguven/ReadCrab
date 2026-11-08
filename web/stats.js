@@ -9,6 +9,24 @@
     'Tem', 'Ağu', 'Eyl', 'Eki', 'Kas', 'Ara'
   ];
 
+  var histDateFmt = new Intl.DateTimeFormat('tr-TR', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric'
+  });
+
+  function formatHistoryDate(yyyyMmDd) {
+    var parts = String(yyyyMmDd || '').split('-');
+    if (parts.length !== 3) return String(yyyyMmDd || '');
+    var y = parseInt(parts[0], 10);
+    var m = parseInt(parts[1], 10);
+    var d = parseInt(parts[2], 10);
+    if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) {
+      return String(yyyyMmDd || '');
+    }
+    return histDateFmt.format(new Date(y, m - 1, d));
+  }
+
   function formatDuration(sec) {
     var s = Math.max(0, Math.floor(Number(sec) || 0));
     if (s < 60) {
@@ -278,23 +296,29 @@
           }
           titleChildren.push(it.book_title);
 
-          var subText =
+          var startPct = Math.round((it.start_percent || 0) * 100);
+          var endPct = Math.round((it.end_percent || 0) * 100);
+          var pctText =
+            startPct === endPct
+              ? '%' + endPct
+              : '%' + startPct + ' → %' + endPct;
+          var pctSpan = el('span', { className: 'nowrap', text: pctText });
+          pctSpan.style.whiteSpace = 'nowrap';
+
+          var subPrefix =
             it.series_name +
             ' · ' +
-            it.local_date +
+            formatHistoryDate(it.local_date) +
             ' · ' +
             formatDuration(it.active_seconds) +
             ' · ' +
             it.pages_read +
-            ' sayfa · %' +
-            Math.round((it.start_percent || 0) * 100) +
-            ' → %' +
-            Math.round((it.end_percent || 0) * 100);
+            ' sayfa · ';
 
           var li = el('li', { className: 'list-item' }, [
             el('div', { className: 'list-content' }, [
               el('h2', { className: 'list-title' }, titleChildren),
-              el('p', { className: 'list-sub', text: subText })
+              el('p', { className: 'list-sub' }, [subPrefix, pctSpan])
             ])
           ]);
           ul.appendChild(li);
