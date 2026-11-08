@@ -46,10 +46,15 @@
     var curPage = initialPage;
     var curFit = getSavedFit();
 
-    var readerEl = el('div', { className: 'reader' });
+    var readerEl = el('div', { className: 'reader comic' });
     if (window.KRS_THEME) {
       var darkPal = window.KRS_THEME.generatePalette(window.KRS_THEME.getSeed(), true);
+      var palKeys = Object.keys(darkPal);
+      for (var pk = 0; pk < palKeys.length; pk++) {
+        readerEl.style.setProperty('--md-sys-color-' + palKeys[pk], darkPal[palKeys[pk]]);
+      }
       readerEl.style.background = darkPal['surface-container-lowest'];
+      readerEl.style.color = darkPal['on-surface'];
     }
 
     var backBtn = el(

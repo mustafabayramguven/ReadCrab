@@ -12,15 +12,18 @@
 
   function getSavedTheme() {
     try {
-      var v = localStorage.getItem('krs.theme');
+      var v = localStorage.getItem('krs.readerTheme');
       if (v === 'light' || v === 'dark' || v === 'sepia') return v;
     } catch (_) {}
+    if (typeof document !== 'undefined' && document.documentElement) {
+      return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+    }
     return 'light';
   }
 
   function saveTheme(v) {
     try {
-      localStorage.setItem('krs.theme', v);
+      localStorage.setItem('krs.readerTheme', v);
     } catch (_) {}
   }
 
@@ -386,6 +389,8 @@
         ? window.KRS_THEME.readerColors(curTheme, seed)
         : { bg: '#FEF7FF', fg: '#1D1B20', link: '#6750A4' };
       readerEl.style.background = rc.bg;
+      stage.style.background = rc.bg;
+      iframe.style.background = rc.bg;
       var doc = iframe.contentDocument;
       if (doc && doc.documentElement) {
         var st = doc.documentElement.style;
@@ -517,6 +522,7 @@
       curChapter = idx;
       curRatio = clamp01(targetRatio);
       updateNavButtons();
+      applyFrameStyles();
 
       iframe.style.opacity = '0';
       iframe.onload = function () {

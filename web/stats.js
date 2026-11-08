@@ -11,6 +11,9 @@
 
   function formatDuration(sec) {
     var s = Math.max(0, Math.floor(Number(sec) || 0));
+    if (s < 60) {
+      return s + ' sn';
+    }
     var h = Math.floor(s / 3600);
     var m = Math.floor((s % 3600) / 60);
     var rem = s % 60;
@@ -29,10 +32,39 @@
     return d + ' ' + mName;
   }
 
-  function buildBarChart(titleText, ariaLabel, daily, valueFn, unitLabel) {
+  function computeNiceTicks(maxVal) {
+    if (maxVal <= 0) {
+      return { top: 1, ticks: [0, 1], empty: true };
+    }
+    var bases = [1, 2, 5];
+    var exp = 0;
+    var step = 1;
+    while (true) {
+      var mult = Math.pow(10, exp);
+      var found = false;
+      for (var b = 0; b < bases.length; b++) {
+        var cand = bases[b] * mult;
+        if (Math.ceil(maxVal / cand) <= 4) {
+          step = cand;
+          found = true;
+          break;
+        }
+      }
+      if (found) break;
+      exp += 1;
+    }
+    var count = Math.max(1, Math.ceil(maxVal / step));
+    var ticks = [];
+    for (var i = 0; i <= count; i++) {
+      ticks.push(i * step);
+    }
+    return { top: count * step, ticks: ticks, empty: false };
+  }
+
+  function buildBarChart(titleText, ariaLabel, daily, valueFn, unitLabel, cleanups, mount) {
     var el = KRS.el;
+    var clearNode = KRS.clearNode;
     var svg = document.createElementNS(SVG_NS, 'svg');
-    svg.setAttribute('viewBox', '0 0 640 200');
     svg.setAttribute('role', 'img');
     svg.setAttribute('aria-label', ariaLabel);
 
@@ -43,75 +75,141 @@
       values.push(v);
       if (v > maxVal) maxVal = v;
     }
-    if (maxVal <= 0) maxVal = 10;
 
-    var leftPad = 40;
-    var rightPad = 12;
-    var topPad = 16;
-    var bottomPad = 28;
-    var plotW = 640 - leftPad - rightPad;
-    var plotH = 200 - topPad - bottomPad;
+    var tickInfo = computeNiceTicks(maxVal);
+    var topVal = tickInfo.top;
+    var ticks = tickInfo.ticks;
 
-    var steps = [0, 0.5, 1];
-    for (var s = 0; s < steps.length; s++) {
-      var ratio = steps[s];
-      var y = topPad + plotH * (1 - ratio);
-      var line = document.createElementNS(SVG_NS, 'line');
-      line.setAttribute('class', 'grid-line');
-      line.setAttribute('x1', String(leftPad));
-      line.setAttribute('x2', String(640 - rightPad));
-      line.setAttribute('y1', String(y));
-      line.setAttribute('y2', String(y));
-      svg.appendChild(line);
-
-      var lbl = document.createElementNS(SVG_NS, 'text');
-      lbl.setAttribute('class', 'axis-label');
-      lbl.setAttribute('x', String(leftPad - 6));
-      lbl.setAttribute('y', String(y + 4));
-      lbl.setAttribute('text-anchor', 'end');
-      lbl.textContent = String(Math.round(maxVal * ratio));
-      svg.appendChild(lbl);
-    }
-
-    var n = Math.max(1, daily.length);
-    var slotW = plotW / n;
-    var barW = Math.max(4, slotW * 0.68);
-
-    for (var j = 0; j < daily.length; j++) {
-      var val = values[j];
-      var barH = val > 0 ? Math.max(4, (val / maxVal) * plotH) : 2;
-      var bx = leftPad + j * slotW + (slotW - barW) / 2;
-      var by = topPad + plotH - barH;
-
-      var rect = document.createElementNS(SVG_NS, 'rect');
-      rect.setAttribute('class', j === daily.length - 1 ? 'bar today' : 'bar');
-      rect.setAttribute('x', bx.toFixed(2));
-      rect.setAttribute('y', by.toFixed(2));
-      rect.setAttribute('width', barW.toFixed(2));
-      rect.setAttribute('height', barH.toFixed(2));
-      rect.setAttribute('rx', '3');
-
-      var t = document.createElementNS(SVG_NS, 'title');
-      var shortD = formatShortDate(daily[j].date);
-      t.textContent = shortD + ': ' + val + ' ' + unitLabel;
-      rect.appendChild(t);
-      svg.appendChild(rect);
-
-      if (j === 0 || j === Math.floor(n / 2) || j === n - 1) {
-        var xl = document.createElementNS(SVG_NS, 'text');
-        xl.setAttribute('class', 'axis-label');
-        xl.setAttribute('x', (bx + barW / 2).toFixed(2));
-        xl.setAttribute('y', String(200 - 8));
-        xl.setAttribute('text-anchor', 'middle');
-        xl.textContent = shortD;
-        svg.appendChild(xl);
-      }
-    }
-
-    return el('section', { className: 'chart-card' }, [
+    var card = el('section', { className: 'chart-card' }, [
       el('h2', { text: titleText }),
       svg
     ]);
+
+    function renderSvg(rawW) {
+      clearNode(svg);
+      var w = Math.max(240, Math.floor(rawW || 600));
+      var h = 200;
+      svg.setAttribute('width', String(w));
+      svg.setAttribute('height', String(h));
+      svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
+
+      var leftPad = 36;
+      var rightPad = 14;
+      var topPad = 16;
+      var bottomPad = 28;
+      var plotW = Math.max(100, w - leftPad - rightPad);
+      var plotH = h - topPad - bottomPad;
+
+      for (var s = 0; s < ticks.length; s++) {
+        var tVal = ticks[s];
+        var ratio = topVal > 0 ? tVal / topVal : 0;
+        var y = topPad + plotH * (1 - ratio);
+        var line = document.createElementNS(SVG_NS, 'line');
+        line.setAttribute('class', 'grid-line');
+        line.setAttribute('x1', String(leftPad));
+        line.setAttribute('x2', String(w - rightPad));
+        line.setAttribute('y1', y.toFixed(2));
+        line.setAttribute('y2', y.toFixed(2));
+        svg.appendChild(line);
+
+        var lbl = document.createElementNS(SVG_NS, 'text');
+        lbl.setAttribute('class', 'axis-label');
+        lbl.setAttribute('x', String(leftPad - 6));
+        lbl.setAttribute('y', (y + 4).toFixed(2));
+        lbl.setAttribute('text-anchor', 'end');
+        lbl.textContent = String(tVal);
+        svg.appendChild(lbl);
+      }
+
+      var n = Math.max(1, daily.length);
+      var slotW = plotW / n;
+      var barW = Math.max(3, slotW * 0.68);
+
+      var labelSet = {};
+      if (n > 0) {
+        if (w < 600) {
+          labelSet[0] = true;
+          labelSet[Math.floor((n - 1) / 2)] = true;
+          labelSet[n - 1] = true;
+        } else {
+          labelSet[0] = true;
+          labelSet[Math.round((n - 1) * 0.25)] = true;
+          labelSet[Math.round((n - 1) * 0.5)] = true;
+          labelSet[Math.round((n - 1) * 0.75)] = true;
+          labelSet[n - 1] = true;
+        }
+      }
+
+      for (var j = 0; j < daily.length; j++) {
+        var val = values[j];
+        var bx = leftPad + j * slotW + (slotW - barW) / 2;
+        var shortD = formatShortDate(daily[j].date);
+
+        if (val > 0) {
+          var barH = Math.max(4, (val / topVal) * plotH);
+          var by = topPad + plotH - barH;
+          var rect = document.createElementNS(SVG_NS, 'rect');
+          rect.setAttribute('class', j === daily.length - 1 ? 'bar today' : 'bar');
+          rect.setAttribute('x', bx.toFixed(2));
+          rect.setAttribute('y', by.toFixed(2));
+          rect.setAttribute('width', barW.toFixed(2));
+          rect.setAttribute('height', barH.toFixed(2));
+          rect.setAttribute('rx', '3');
+
+          var t = document.createElementNS(SVG_NS, 'title');
+          t.textContent = shortD + ': ' + val + ' ' + unitLabel;
+          rect.appendChild(t);
+          svg.appendChild(rect);
+        }
+
+        if (labelSet[j]) {
+          var xl = document.createElementNS(SVG_NS, 'text');
+          xl.setAttribute('class', 'axis-label');
+          var cx = bx + barW / 2;
+          var clampedX = Math.max(leftPad + 16, Math.min(w - rightPad - 16, cx));
+          xl.setAttribute('x', clampedX.toFixed(2));
+          xl.setAttribute('y', String(h - 8));
+          xl.setAttribute('text-anchor', 'middle');
+          xl.textContent = shortD;
+          svg.appendChild(xl);
+        }
+      }
+
+      if (tickInfo.empty) {
+        var emptyTxt = document.createElementNS(SVG_NS, 'text');
+        emptyTxt.setAttribute('class', 'axis-label');
+        emptyTxt.setAttribute('x', (leftPad + plotW / 2).toFixed(2));
+        emptyTxt.setAttribute('y', (topPad + plotH / 2 + 4).toFixed(2));
+        emptyTxt.setAttribute('text-anchor', 'middle');
+        emptyTxt.textContent = 'Henüz veri yok';
+        svg.appendChild(emptyTxt);
+      }
+    }
+
+    var initW = ((mount && mount.clientWidth) || (typeof window !== 'undefined' && window.innerWidth) || 640) - 64;
+    renderSvg(initW);
+
+    var resizeTimer = null;
+    var ro = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(function () {
+        if (resizeTimer) clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(function () {
+          var cw = card.clientWidth ? card.clientWidth - 32 : 0;
+          if (cw > 0) renderSvg(cw);
+        }, 150);
+      });
+      ro.observe(card);
+    }
+
+    if (Array.isArray(cleanups)) {
+      cleanups.push(function () {
+        if (resizeTimer) clearTimeout(resizeTimer);
+        if (ro) ro.disconnect();
+      });
+    }
+
+    return card;
   }
 
   async function renderHistory(mount, gen) {
@@ -313,15 +411,26 @@
       mount.appendChild(statGrid);
 
       var daily = data.daily || [];
+      var cleanups = [];
+      var maxSec = 0;
+      for (var dIdx = 0; dIdx < daily.length; dIdx++) {
+        var ds = Number(daily[dIdx].seconds) || 0;
+        if (ds > maxSec) maxSec = ds;
+      }
+      var useSeconds = maxSec > 0 && maxSec < 60;
       mount.appendChild(
         buildBarChart(
-          'Günlük okuma süresi (dk)',
+          useSeconds ? 'Günlük okuma süresi (sn)' : 'Günlük okuma süresi (dk)',
           'Son 30 günde günlük okuma süresi',
           daily,
           function (d) {
-            return d.seconds > 0 ? Math.max(1, Math.round(d.seconds / 60)) : 0;
+            var sec = Number(d.seconds) || 0;
+            if (sec <= 0) return 0;
+            return useSeconds ? Math.round(sec) : Math.max(1, Math.round(sec / 60));
           },
-          'dk'
+          useSeconds ? 'sn' : 'dk',
+          cleanups,
+          mount
         )
       );
       mount.appendChild(
@@ -332,7 +441,9 @@
           function (d) {
             return d.pages || 0;
           },
-          'sayfa'
+          'sayfa',
+          cleanups,
+          mount
         )
       );
 
@@ -382,7 +493,10 @@
                 target: tVal
               });
               KRS.toast('Hedef kaydedildi');
-              renderStats(mount);
+              for (var c = 0; c < cleanups.length; c++) {
+                cleanups[c]();
+              }
+              renderStats(mount, myGen);
             } catch (err) {
               KRS.toast(err.message);
             }
@@ -419,6 +533,11 @@
         ])
       ]);
       mount.appendChild(goalCard);
+      return function () {
+        for (var c = 0; c < cleanups.length; c++) {
+          cleanups[c]();
+        }
+      };
     } catch (err) {
       if (myGen !== undefined && myGen !== KRS.routeGen) {
         return;

@@ -1810,7 +1810,12 @@
     } else if (hash === '#/istatistik') {
       setTopBar({ title: 'İstatistik' });
       if (KRS.stats && typeof KRS.stats.renderStats === 'function') {
-        KRS.stats.renderStats(mainPage, gen);
+        var cleanupStats = await KRS.stats.renderStats(mainPage, gen);
+        if (gen !== KRS.routeGen) {
+          if (typeof cleanupStats === 'function') cleanupStats();
+          return;
+        }
+        setCleanup(cleanupStats);
       }
     } else if (hash === '#/hesap') {
       renderAccount();

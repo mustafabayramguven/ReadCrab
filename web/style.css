@@ -769,9 +769,9 @@ body.reading main.page {
 
 .chip-row {
   display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  align-items: center;
+  flex-direction: column;
+  gap: 8px;
+  align-items: stretch;
 }
 
 .chip-group {
@@ -779,6 +779,44 @@ body.reading main.page {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+}
+
+.chip-row .chip-group {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.chip-row .chip-group::-webkit-scrollbar {
+  display: none;
+}
+
+@media (min-width: 840px) {
+  .chip-row {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 24px;
+  }
+
+  .chip-row .chip-group {
+    overflow-x: visible;
+  }
+
+  .chip-row .chip-group + .chip-group {
+    position: relative;
+  }
+
+  .chip-row .chip-group + .chip-group::before {
+    content: "";
+    position: absolute;
+    left: -12px;
+    top: 4px;
+    bottom: 4px;
+    width: 1px;
+    background: var(--md-sys-color-outline-variant);
+  }
 }
 
 .chip {
@@ -797,6 +835,8 @@ body.reading main.page {
   font-weight: var(--md-sys-typescale-label-large-weight);
   letter-spacing: var(--md-sys-typescale-label-large-tracking);
   cursor: pointer;
+  white-space: nowrap;
+  flex: none;
 }
 
 .chip[aria-checked="true"] {
@@ -1086,6 +1126,11 @@ body.reading main.page {
   display: flex;
   flex-direction: column;
   width: 100%;
+  max-width: 480px;
+}
+
+.section-card form .btn {
+  max-width: 480px;
 }
 
 .field input {
@@ -1425,19 +1470,19 @@ dialog.sheet[open] {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: 4px;
 }
 
 .swatch-group {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 10px;
+  gap: 4px;
 }
 
 .swatch {
-  width: 48px;
-  height: 48px;
+  width: 44px;
+  height: 44px;
   border-radius: var(--md-sys-shape-corner-full);
   border: 2px solid var(--md-sys-color-outline-variant);
   display: inline-flex;
@@ -1445,6 +1490,7 @@ dialog.sheet[open] {
   justify-content: center;
   cursor: pointer;
   padding: 0;
+  flex: none;
 }
 
 .swatch[aria-checked="true"] {
@@ -1453,13 +1499,14 @@ dialog.sheet[open] {
 }
 
 .color-picker-input {
-  width: 48px;
-  height: 48px;
+  width: 44px;
+  height: 44px;
   border-radius: var(--md-sys-shape-corner-small);
   border: 1px solid var(--md-sys-color-outline);
   background: transparent;
   padding: 4px;
   cursor: pointer;
+  flex: none;
 }
 
 /* İskelet ve Boş durumlar (15.6) */
@@ -1594,7 +1641,7 @@ dialog.sheet[open] {
   align-items: center;
   gap: 12px;
   padding: 8px 16px;
-  background: color-mix(in srgb, var(--md-sys-color-surface) 92%, transparent);
+  background: var(--md-sys-color-surface-container);
   color: var(--md-sys-color-on-surface);
   z-index: 35;
   transition: opacity var(--md-sys-motion-duration-medium1) var(--md-sys-motion-easing-standard),
@@ -1769,7 +1816,7 @@ dialog.sheet[open] {
 
 .chart-card .axis-label {
   fill: var(--md-sys-color-on-surface-variant);
-  font-size: 11px;
+  font-size: 12px;
   font-family: var(--md-ref-typeface-brand);
 }
 
