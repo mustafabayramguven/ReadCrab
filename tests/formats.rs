@@ -13,7 +13,7 @@ use kavita_rs::{
         comic::{bsdtar_list, bsdtar_read, bsdtar_run, comic_pages, comic_read, glob_escape},
         epub::{epub_asset, epub_chapter_html, epub_open, normalize_zip_path},
         mobi::mobi_open,
-        sanitize::{sanitize_chapter, svg_image_to_img, FRAME_CSP, SrcMode},
+        sanitize::{sanitize_chapter, svg_image_to_img, SrcMode, FRAME_CSP},
         Format, FormatError, MAX_ENTRY_BYTES,
     },
 };

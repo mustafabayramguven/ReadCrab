@@ -131,10 +131,8 @@ pub fn make_epub(dir: &Path, name: &str, opts: EpubOpts) -> PathBuf {
     } else {
         r#"<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>Birinci Bölüm</h1><p>Birinci bölüm metni</p><img src="images/pic.png" alt="pic"/></body></html>"#
     };
-    let ch2 =
-        r#"<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>İkinci Bölüm</h1><p>İkinci bölüm metni</p></body></html>"#;
-    let ch3 =
-        r#"<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>Üçüncü Bölüm</h1><p>Üçüncü bölüm metni</p></body></html>"#;
+    let ch2 = r#"<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>İkinci Bölüm</h1><p>İkinci bölüm metni</p></body></html>"#;
+    let ch3 = r#"<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>Üçüncü Bölüm</h1><p>Üçüncü bölüm metni</p></body></html>"#;
 
     let pic_png = png(12, 12, [20, 40, 60]);
     let cover_png = png(60, 90, [100, 150, 200]);
