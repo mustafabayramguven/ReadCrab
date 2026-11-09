@@ -168,10 +168,7 @@ pub async fn comic_pages(path: &Path, fmt: Format) -> Result<Vec<String>, Format
     }
 }
 
-pub async fn comic_pages_cached(
-    path: &Path,
-    fmt: Format,
-) -> Result<Arc<Vec<String>>, FormatError> {
+pub async fn comic_pages_cached(path: &Path, fmt: Format) -> Result<Arc<Vec<String>>, FormatError> {
     let stamp = file_stamp(path)?;
     if let Some((cached_path, cached_stamp, pages)) = PAGE_LIST_CACHE
         .lock()

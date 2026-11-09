@@ -29,10 +29,7 @@ use crate::{
 };
 
 // shortcut: tek kitaplık önbellek, iki kullanıcı dönüşümlü farklı MOBI okursa yeniden çözülür, gerekirse LRU
-fn open_mobi_cached(
-    cache: &MobiCache,
-    path: &Path,
-) -> Result<Arc<MobiBook>, FormatError> {
+fn open_mobi_cached(cache: &MobiCache, path: &Path) -> Result<Arc<MobiBook>, FormatError> {
     let stamp = file_stamp(path)?;
     if let Some((cached_path, cached_stamp, book)) =
         cache.lock().unwrap_or_else(|e| e.into_inner()).as_ref()

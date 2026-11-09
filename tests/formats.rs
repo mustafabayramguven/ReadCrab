@@ -10,7 +10,8 @@ use common::{
 use kavita_rs::{
     error::AppError,
     formats::{
-        comic::{bsdtar_list, bsdtar_read, bsdtar_run, comic_pages, comic_pages_cached, comic_read,
+        comic::{
+            bsdtar_list, bsdtar_read, bsdtar_run, comic_pages, comic_pages_cached, comic_read,
             glob_escape,
         },
         epub::{epub_asset, epub_chapter_html, epub_open, normalize_zip_path},

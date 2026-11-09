@@ -272,10 +272,7 @@ async fn login_rate_limit_burst() {
         }
     }
 
-    assert!(
-        1 <= count_401 && count_401 <= 5,
-        "count_401: {count_401}"
-    );
+    assert!(1 <= count_401 && count_401 <= 5, "count_401: {count_401}");
     assert_eq!(count_401 + count_429, 50);
     assert!(count_429 >= 45, "count_429: {count_429}");
 }
@@ -284,7 +281,10 @@ async fn login_rate_limit_burst() {
 async fn login_long_multibyte_password() {
     let (app, _dirs) = test_app().await;
     let body = format!(r#"{{"username":"admin","password":"{}"}}"#, "ş".repeat(100));
-    for (uri, want) in [("/api/setup", StatusCode::CREATED), ("/api/login", StatusCode::OK)] {
+    for (uri, want) in [
+        ("/api/setup", StatusCode::CREATED),
+        ("/api/login", StatusCode::OK),
+    ] {
         let res = app
             .clone()
             .oneshot(
