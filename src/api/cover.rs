@@ -127,7 +127,7 @@ async fn delete_cover(
     let covers = state.cfg.data_dir.join("covers");
     let has_cover = extract_cover(&state.cfg.books_dir, &row, &covers).await;
     if !has_cover {
-        let _ = tokio::fs::remove_file(covers.join(format!("{id}.jpg"))).await;
+        let _ = std::fs::remove_file(covers.join(format!("{id}.jpg")));
     }
     let cover_version = state
         .db
