@@ -1397,6 +1397,18 @@
       if (themeApi) themeApi.setMotion(motionSwitch.checked);
     });
 
+    var blackSwitch = el('input', {
+      type: 'checkbox',
+      role: 'switch',
+      className: 'switch',
+      id: 'black-switch',
+      'aria-describedby': 'black-switch-help',
+      checked: themeApi && themeApi.getBlack ? themeApi.getBlack() : false
+    });
+    blackSwitch.addEventListener('change', function () {
+      if (themeApi && themeApi.setBlack) themeApi.setBlack(blackSwitch.checked);
+    });
+
     var appearanceCard = el('section', { className: 'section-card' }, [
       el('h2', { className: 'type-title-medium', text: 'Görünüm' }),
       el('div', { className: 'setting-row' }, [
@@ -1414,6 +1426,21 @@
           text: 'Hareketi azalt'
         }),
         motionSwitch
+      ]),
+      el('div', { className: 'setting-row' }, [
+        el('div', { className: 'setting-text' }, [
+          el('label', {
+            for: 'black-switch',
+            className: 'type-body-large',
+            text: 'Saf siyah'
+          }),
+          el('span', {
+            id: 'black-switch-help',
+            className: 'type-body-small setting-help',
+            text: 'Koyu modda AMOLED siyahı. Açık temada etkisizdir.'
+          })
+        ]),
+        blackSwitch
       ])
     ]);
 

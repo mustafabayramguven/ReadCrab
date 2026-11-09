@@ -275,78 +275,75 @@ async fn static_handler(Path(ad): Path<String>) -> Result<Response, AppError> {
         )
             .into_response());
     }
-    let (bytes, content_type, cache_control): (&[u8], &'static str, &'static str) =
-        match ad.as_str() {
-            "app.js" => (
-                APP_JS.as_bytes(),
-                "application/javascript; charset=utf-8",
-                "no-cache",
-            ),
-            "tracker.js" => (
-                TRACKER_JS.as_bytes(),
-                "application/javascript; charset=utf-8",
-                "no-cache",
-            ),
-            "reader-comic.js" => (
-                READER_COMIC_JS.as_bytes(),
-                "application/javascript; charset=utf-8",
-                "no-cache",
-            ),
-            "reader-text.js" => (
-                READER_TEXT_JS.as_bytes(),
-                "application/javascript; charset=utf-8",
-                "no-cache",
-            ),
-            "stats.js" => (
-                STATS_JS.as_bytes(),
-                "application/javascript; charset=utf-8",
-                "no-cache",
-            ),
-            "theme.js" => (
-                THEME_JS.as_bytes(),
-                "application/javascript; charset=utf-8",
-                "no-cache",
-            ),
-            "calc.js" => (
-                CALC_JS.as_bytes(),
-                "application/javascript; charset=utf-8",
-                "no-cache",
-            ),
-            "reader-ui.js" => (
-                READER_UI_JS.as_bytes(),
-                "application/javascript; charset=utf-8",
-                "no-cache",
-            ),
-            "reader-fonts.css" => (
-                READER_FONTS_CSS.as_bytes(),
-                "text/css; charset=utf-8",
-                "no-cache",
-            ),
-            "manifest.webmanifest" => (
-                MANIFEST.as_bytes(),
-                "application/manifest+json",
-                "no-cache",
-            ),
-            "icon-192.png" => (ICON_192, "image/png", "public, max-age=86400"),
-            "icon-512.png" => (ICON_512, "image/png", "public, max-age=86400"),
-            "style.css" => (STYLE_CSS.as_bytes(), "text/css; charset=utf-8", "no-cache"),
-            "frame.css" => (FRAME_CSS.as_bytes(), "text/css; charset=utf-8", "no-cache"),
-            "favicon.svg" => (
-                FAVICON_SVG.as_bytes(),
-                "image/svg+xml",
-                "public, max-age=86400",
-            ),
-            "icons.svg" => (
-                ICONS_SVG.as_bytes(),
-                "image/svg+xml",
-                "public, max-age=86400",
-            ),
-            "fonts/roboto-flex-latin.woff2" => (FONT_LATIN, "font/woff2", "public, max-age=86400"),
-            "fonts/roboto-flex-latin-ext.woff2" => {
-                (FONT_LATIN_EXT, "font/woff2", "public, max-age=86400")
-            }
-            _ => return Err(AppError::NotFound),
-        };
+    let (bytes, content_type, cache_control): (&[u8], &'static str, &'static str) = match ad
+        .as_str()
+    {
+        "app.js" => (
+            APP_JS.as_bytes(),
+            "application/javascript; charset=utf-8",
+            "no-cache",
+        ),
+        "tracker.js" => (
+            TRACKER_JS.as_bytes(),
+            "application/javascript; charset=utf-8",
+            "no-cache",
+        ),
+        "reader-comic.js" => (
+            READER_COMIC_JS.as_bytes(),
+            "application/javascript; charset=utf-8",
+            "no-cache",
+        ),
+        "reader-text.js" => (
+            READER_TEXT_JS.as_bytes(),
+            "application/javascript; charset=utf-8",
+            "no-cache",
+        ),
+        "stats.js" => (
+            STATS_JS.as_bytes(),
+            "application/javascript; charset=utf-8",
+            "no-cache",
+        ),
+        "theme.js" => (
+            THEME_JS.as_bytes(),
+            "application/javascript; charset=utf-8",
+            "no-cache",
+        ),
+        "calc.js" => (
+            CALC_JS.as_bytes(),
+            "application/javascript; charset=utf-8",
+            "no-cache",
+        ),
+        "reader-ui.js" => (
+            READER_UI_JS.as_bytes(),
+            "application/javascript; charset=utf-8",
+            "no-cache",
+        ),
+        "reader-fonts.css" => (
+            READER_FONTS_CSS.as_bytes(),
+            "text/css; charset=utf-8",
+            "no-cache",
+        ),
+        "manifest.webmanifest" => (MANIFEST.as_bytes(), "application/manifest+json", "no-cache"),
+        "icon-192.png" => (ICON_192, "image/png", "public, max-age=86400"),
+        "icon-512.png" => (ICON_512, "image/png", "public, max-age=86400"),
+        "style.css" => (STYLE_CSS.as_bytes(), "text/css; charset=utf-8", "no-cache"),
+        "frame.css" => (FRAME_CSS.as_bytes(), "text/css; charset=utf-8", "no-cache"),
+        "favicon.svg" => (
+            FAVICON_SVG.as_bytes(),
+            "image/svg+xml",
+            "public, max-age=86400",
+        ),
+        "icons.svg" => (
+            ICONS_SVG.as_bytes(),
+            "image/svg+xml",
+            "public, max-age=86400",
+        ),
+        "fonts/roboto-flex-latin.woff2" => (FONT_LATIN, "font/woff2", "public, max-age=86400"),
+        "fonts/roboto-flex-latin-ext.woff2" => {
+            (FONT_LATIN_EXT, "font/woff2", "public, max-age=86400")
+        }
+        _ => return Err(AppError::NotFound),
+    };
 
     Ok((
         StatusCode::OK,
