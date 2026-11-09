@@ -1,9 +1,7 @@
 mod common;
 
 use axum::http::StatusCode;
-use common::{
-    call, create_user_cookie, login_as_admin, make_cbz, png, raw, test_app, TempDirs,
-};
+use common::{call, create_user_cookie, login_as_admin, make_cbz, png, raw, test_app, TempDirs};
 use readcrab::scan::scan_once;
 
 async fn book_id(dirs: &TempDirs, rel: &str) -> i64 {
@@ -30,6 +28,10 @@ async fn flags(dirs: &TempDirs, id: i64) -> (i64, i64, i64) {
 async fn put(app: &axum::Router, cookie: &str, id: i64, ct: &str, body: Vec<u8>) -> StatusCode {
     let uri = format!("/api/books/{id}/cover");
     raw(app, "PUT", &uri, cookie, ct, None, body).await.0
+}
+
+fn ok_png2() -> Vec<u8> {
+    png(5, 5, [1, 1, 1])
 }
 
 async fn cover_width(app: &axum::Router, cookie: &str, id: i64) -> Option<u32> {
@@ -60,49 +62,50 @@ async fn custom_cover_lifecycle() {
 
     // yönetici dışı: 403
     let img = png(800, 1200, [200, 10, 10]);
-    assert_eq!(
-        put(&app, &user, b2, "image/png", img.clone()).await,
-        StatusCode::FORBIDDEN
-    );
+    let st = put(&app, &user, b2, "image/png", img.clone()).await;
+    assert_eq!(st, StatusCode::FORBIDDEN);
     let uri = format!("/api/books/{b2}/cover");
     let (st, _) = call(&app, "DELETE", &uri, &user, None).await;
     assert_eq!(st, StatusCode::FORBIDDEN);
 
     // yükle: 600 genişlik, sürüm 1, seri kapağı özel kapaklı kitap
     assert_eq!(cover_width(&app, &admin, b2).await, Some(300));
-    assert_eq!(put(&app, &admin, b2, "image/png", img).await, StatusCode::OK);
+    let st = put(&app, &admin, b2, "image/png", img).await;
+    assert_eq!(st, StatusCode::OK);
     assert_eq!(cover_width(&app, &admin, b2).await, Some(600));
     assert_eq!(flags(&dirs, b2).await, (1, 1, 1));
     let (_, v) = call(&app, "GET", "/api/series", &admin, None).await;
     assert_eq!(v["items"][0]["cover_book_id"], b2);
     assert_eq!(v["items"][0]["cover_v"], 1);
-    let (_, v) = call(&app, "GET", &format!("/api/books/{b2}"), &admin, None).await;
+    let detail_uri = format!("/api/books/{b2}");
+    let (_, v) = call(&app, "GET", &detail_uri, &admin, None).await;
     assert_eq!(v["cover_version"], 1);
 
     // geçersiz girdiler
     let ok_png = png(10, 10, [1, 1, 1]);
-    let bad_cases: [(&str, Vec<u8>, StatusCode); 6] = [
-        ("image/png", b"bozuk".to_vec(), StatusCode::BAD_REQUEST),
-        ("image/png", b"bu bir metin".to_vec(), StatusCode::BAD_REQUEST),
-        ("image/png", png(16385, 1, [0, 0, 0]), StatusCode::BAD_REQUEST),
-        ("image/png", vec![0; 11 * 1024 * 1024], StatusCode::PAYLOAD_TOO_LARGE),
-        ("image/gif", ok_png.clone(), StatusCode::UNSUPPORTED_MEDIA_TYPE),
-        ("text/plain", ok_png, StatusCode::UNSUPPORTED_MEDIA_TYPE),
+    let bad_cases: [(&str, Vec<u8>, u16); 6] = [
+        ("image/png", b"bozuk".to_vec(), 400),
+        ("image/png", b"bu bir metin".to_vec(), 400),
+        ("image/png", png(16385, 1, [0, 0, 0]), 400),
+        ("image/png", vec![0; 11 * 1024 * 1024], 413),
+        ("image/gif", ok_png.clone(), 415),
+        ("text/plain", ok_png, 415),
     ];
     for (ct, body, want) in bad_cases {
-        assert_eq!(put(&app, &admin, b2, ct, body).await, want, "{ct}");
+        let st = put(&app, &admin, b2, ct, body).await;
+        assert_eq!(st.as_u16(), want, "{ct}");
     }
     assert_eq!(flags(&dirs, b2).await, (1, 1, 1));
-    assert_eq!(
-        put(&app, &admin, 9999, "image/png", png(5, 5, [1, 1, 1])).await,
-        StatusCode::NOT_FOUND
-    );
+    let st = put(&app, &admin, 9999, "image/png", ok_png2()).await;
+    assert_eq!(st, StatusCode::NOT_FOUND);
 
     // yeniden tarama özel kapağı ezmez (dosya değişse de)
-    let before = std::fs::read(dirs.data_dir.path().join(format!("covers/{b2}.jpg"))).unwrap();
-    make_cbz(books, "Seri/2.cbz", &[("p1.png", page.clone()), ("p2.png", page)]);
+    let file = dirs.data_dir.path().join(format!("covers/{b2}.jpg"));
+    let before = std::fs::read(&file).unwrap();
+    let pages = [("p1.png", page.clone()), ("p2.png", page)];
+    make_cbz(books, "Seri/2.cbz", &pages);
     assert!(scan_once(&dirs.state).await);
-    let after = std::fs::read(dirs.data_dir.path().join(format!("covers/{b2}.jpg"))).unwrap();
+    let after = std::fs::read(&file).unwrap();
     assert_eq!(before, after);
     assert_eq!(flags(&dirs, b2).await, (1, 1, 1));
 
@@ -118,9 +121,11 @@ async fn custom_cover_lifecycle() {
 
     // kapaksız kitapta: yükle sonra sil -> has_cover=0
     let png_ok = png(50, 50, [9, 9, 9]);
-    assert_eq!(put(&app, &admin, bad, "image/png", png_ok).await, StatusCode::OK);
+    let st = put(&app, &admin, bad, "image/png", png_ok).await;
+    assert_eq!(st, StatusCode::OK);
     assert_eq!(flags(&dirs, bad).await, (1, 1, 1));
-    let (st, v) = call(&app, "DELETE", &format!("/api/books/{bad}/cover"), &admin, None).await;
+    let bad_uri = format!("/api/books/{bad}/cover");
+    let (st, v) = call(&app, "DELETE", &bad_uri, &admin, None).await;
     assert_eq!(st, StatusCode::OK);
     assert_eq!(v["has_cover"], false);
     assert_eq!(flags(&dirs, bad).await, (0, 0, 2));
