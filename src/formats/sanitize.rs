@@ -6,7 +6,7 @@ use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use crate::formats::epub::normalize_zip_path;
 
 pub const FRAME_CSP: &str =
-    "default-src 'none'; img-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'";
+    "default-src 'none'; img-src 'self'; style-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SrcMode {
@@ -233,7 +233,7 @@ fn has_scheme(url: &str) -> bool {
 pub fn frame_document(body: &str, title: &str) -> String {
     let safe_title = escape_html_text(title);
     format!(
-        "<!doctype html>\n<html lang=\"tr\">\n<head>\n<meta charset=\"utf-8\">\n<title>{safe_title}</title>\n<link rel=\"stylesheet\" href=\"/static/frame.css\">\n</head>\n<body>\n{body}\n</body>\n</html>"
+        "<!doctype html>\n<html lang=\"tr\">\n<head>\n<meta charset=\"utf-8\">\n<title>{safe_title}</title>\n<link rel=\"stylesheet\" href=\"/static/reader-fonts.css\">\n<link rel=\"stylesheet\" href=\"/static/frame.css\">\n</head>\n<body>\n{body}\n</body>\n</html>"
     )
 }
 

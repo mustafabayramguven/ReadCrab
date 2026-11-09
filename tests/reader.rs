@@ -200,6 +200,7 @@ async fn epub_toc_and_chapter() {
     let html = String::from_utf8(html_bytes.to_vec()).unwrap();
     assert!(html.contains("Birinci bölüm metni"));
     assert!(html.contains("/static/frame.css"));
+    assert!(html.contains("/static/reader-fonts.css"));
 }
 
 #[tokio::test]

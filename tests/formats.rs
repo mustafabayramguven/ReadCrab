@@ -271,7 +271,7 @@ fn epub_sanitizes_xss() {
 
     assert_eq!(
         FRAME_CSP,
-        "default-src 'none'; img-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
+        "default-src 'none'; img-src 'self'; style-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
     );
     assert!(!FRAME_CSP.contains("sandbox"));
 }

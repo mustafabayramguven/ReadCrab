@@ -37,6 +37,12 @@ async fn static_files_have_expected_types() {
         ("icons.svg", "image/svg+xml"),
         ("fonts/roboto-flex-latin.woff2", "font/woff2"),
         ("fonts/roboto-flex-latin-ext.woff2", "font/woff2"),
+        ("calc.js", "application/javascript; charset=utf-8"),
+        ("reader-ui.js", "application/javascript; charset=utf-8"),
+        ("reader-fonts.css", "text/css; charset=utf-8"),
+        ("manifest.webmanifest", "application/manifest+json"),
+        ("icon-192.png", "image/png"),
+        ("icon-512.png", "image/png"),
     ];
     for &(name, ct) in expected {
         let res = get(&app, &format!("/static/{name}")).await;
@@ -50,6 +56,13 @@ async fn static_files_have_expected_types() {
         if name.ends_with(".woff2") {
             assert_eq!(&bytes[..4], &b"wOF2"[..], "{name}");
         }
+        if name.ends_with(".png") {
+            assert_eq!(&bytes[..4], b"\x89PNG", "{name}");
+        }
+        if name == "manifest.webmanifest" {
+            let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(v["icons"].as_array().unwrap().len(), 2);
+        }
         if name == "icons.svg" {
             let text = String::from_utf8(bytes).unwrap();
             assert!(text.contains("<symbol id=\"menu_book\""));
@@ -57,10 +70,61 @@ async fn static_files_have_expected_types() {
     }
 }
 
+const READER_FONTS: [&str; 30] = [
+        "atkinson-hyperlegible-latin-400-italic.woff2",
+        "atkinson-hyperlegible-latin-400-normal.woff2",
+        "atkinson-hyperlegible-latin-700-italic.woff2",
+        "atkinson-hyperlegible-latin-700-normal.woff2",
+        "atkinson-hyperlegible-latin-ext-400-italic.woff2",
+        "atkinson-hyperlegible-latin-ext-400-normal.woff2",
+        "atkinson-hyperlegible-latin-ext-700-italic.woff2",
+        "atkinson-hyperlegible-latin-ext-700-normal.woff2",
+        "eb-garamond-latin-ext-wght-italic.woff2",
+        "eb-garamond-latin-ext-wght-normal.woff2",
+        "eb-garamond-latin-wght-italic.woff2",
+        "eb-garamond-latin-wght-normal.woff2",
+        "inter-latin-ext-wght-italic.woff2",
+        "inter-latin-ext-wght-normal.woff2",
+        "inter-latin-wght-italic.woff2",
+        "inter-latin-wght-normal.woff2",
+        "lexend-latin-ext-wght-normal.woff2",
+        "lexend-latin-wght-normal.woff2",
+        "literata-latin-ext-wght-italic.woff2",
+        "literata-latin-ext-wght-normal.woff2",
+        "literata-latin-wght-italic.woff2",
+        "literata-latin-wght-normal.woff2",
+        "merriweather-latin-ext-wght-italic.woff2",
+        "merriweather-latin-ext-wght-normal.woff2",
+        "merriweather-latin-wght-italic.woff2",
+        "merriweather-latin-wght-normal.woff2",
+        "source-serif-4-latin-ext-wght-italic.woff2",
+        "source-serif-4-latin-ext-wght-normal.woff2",
+        "source-serif-4-latin-wght-italic.woff2",
+        "source-serif-4-latin-wght-normal.woff2",
+];
+
+#[tokio::test]
+async fn reader_fonts_are_served_as_woff2() {
+    let (app, _dirs) = test_app().await;
+    for name in READER_FONTS {
+        let res = get(&app, &format!("/static/fonts/{name}")).await;
+        assert_eq!(res.status(), StatusCode::OK, "{name}");
+        let ct = res.headers()[header::CONTENT_TYPE].to_str().unwrap();
+        assert_eq!(ct, "font/woff2", "{name}");
+        let bytes = body_bytes(res).await;
+        assert_eq!(&bytes[..4], &b"wOF2"[..], "{name}");
+    }
+}
+
 #[tokio::test]
 async fn unknown_and_internal_static_names_are_404() {
     let (app, _dirs) = test_app().await;
-    for name in ["bilinmeyen.js", "theme.test.mjs", "fonts/LICENSE"] {
+    for name in [
+        "bilinmeyen.js",
+        "theme.test.mjs",
+        "fonts/LICENSE",
+        "fonts/LICENSE-reader.txt",
+    ] {
         let res = get(&app, &format!("/static/{name}")).await;
         assert_eq!(res.status(), StatusCode::NOT_FOUND, "{name}");
     }
@@ -77,6 +141,8 @@ async fn index_html_script_and_style_rules() {
     let theme = html.find("/static/theme.js").expect("theme.js yok");
     for other in [
         "tracker.js",
+        "calc.js",
+        "reader-ui.js",
         "reader-comic.js",
         "reader-text.js",
         "stats.js",
@@ -101,7 +167,20 @@ async fn index_html_script_and_style_rules() {
         count += 1;
         rest = &after[end + 1..];
     }
-    assert_eq!(count, 6);
+    assert_eq!(count, 8);
+
+    // calc.js ve reader-ui.js, reader-comic.js'ten önce
+    let comic = html.find("/static/reader-comic.js").unwrap();
+    for early in ["calc.js", "reader-ui.js"] {
+        assert!(html.find(&format!("/static/{early}")).unwrap() < comic);
+    }
+    for needle in [
+        "rel=\"manifest\"",
+        "/static/reader-fonts.css",
+        "apple-touch-icon",
+    ] {
+        assert!(html.contains(needle), "{needle}");
+    }
 
     assert!(
         !html.contains("http://") && !html.contains("https://"),

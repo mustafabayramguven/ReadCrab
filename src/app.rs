@@ -36,6 +36,134 @@ const STYLE_CSS: &str = include_str!("../web/style.css");
 const FRAME_CSS: &str = include_str!("../web/frame.css");
 const FAVICON_SVG: &str = include_str!("../web/favicon.svg");
 const ICONS_SVG: &str = include_str!("../web/icons.svg");
+const CALC_JS: &str = include_str!("../web/calc.js");
+const READER_UI_JS: &str = include_str!("../web/reader-ui.js");
+const READER_FONTS_CSS: &str = include_str!("../web/reader-fonts.css");
+const MANIFEST: &str = include_str!("../web/manifest.webmanifest");
+const ICON_192: &[u8] = include_bytes!("../web/icon-192.png");
+const ICON_512: &[u8] = include_bytes!("../web/icon-512.png");
+const RPFONTS: &[(&str, &[u8])] = &[
+    (
+        "fonts/atkinson-hyperlegible-latin-400-italic.woff2",
+        include_bytes!("../web/fonts/atkinson-hyperlegible-latin-400-italic.woff2"),
+    ),
+    (
+        "fonts/atkinson-hyperlegible-latin-400-normal.woff2",
+        include_bytes!("../web/fonts/atkinson-hyperlegible-latin-400-normal.woff2"),
+    ),
+    (
+        "fonts/atkinson-hyperlegible-latin-700-italic.woff2",
+        include_bytes!("../web/fonts/atkinson-hyperlegible-latin-700-italic.woff2"),
+    ),
+    (
+        "fonts/atkinson-hyperlegible-latin-700-normal.woff2",
+        include_bytes!("../web/fonts/atkinson-hyperlegible-latin-700-normal.woff2"),
+    ),
+    (
+        "fonts/atkinson-hyperlegible-latin-ext-400-italic.woff2",
+        include_bytes!("../web/fonts/atkinson-hyperlegible-latin-ext-400-italic.woff2"),
+    ),
+    (
+        "fonts/atkinson-hyperlegible-latin-ext-400-normal.woff2",
+        include_bytes!("../web/fonts/atkinson-hyperlegible-latin-ext-400-normal.woff2"),
+    ),
+    (
+        "fonts/atkinson-hyperlegible-latin-ext-700-italic.woff2",
+        include_bytes!("../web/fonts/atkinson-hyperlegible-latin-ext-700-italic.woff2"),
+    ),
+    (
+        "fonts/atkinson-hyperlegible-latin-ext-700-normal.woff2",
+        include_bytes!("../web/fonts/atkinson-hyperlegible-latin-ext-700-normal.woff2"),
+    ),
+    (
+        "fonts/eb-garamond-latin-ext-wght-italic.woff2",
+        include_bytes!("../web/fonts/eb-garamond-latin-ext-wght-italic.woff2"),
+    ),
+    (
+        "fonts/eb-garamond-latin-ext-wght-normal.woff2",
+        include_bytes!("../web/fonts/eb-garamond-latin-ext-wght-normal.woff2"),
+    ),
+    (
+        "fonts/eb-garamond-latin-wght-italic.woff2",
+        include_bytes!("../web/fonts/eb-garamond-latin-wght-italic.woff2"),
+    ),
+    (
+        "fonts/eb-garamond-latin-wght-normal.woff2",
+        include_bytes!("../web/fonts/eb-garamond-latin-wght-normal.woff2"),
+    ),
+    (
+        "fonts/inter-latin-ext-wght-italic.woff2",
+        include_bytes!("../web/fonts/inter-latin-ext-wght-italic.woff2"),
+    ),
+    (
+        "fonts/inter-latin-ext-wght-normal.woff2",
+        include_bytes!("../web/fonts/inter-latin-ext-wght-normal.woff2"),
+    ),
+    (
+        "fonts/inter-latin-wght-italic.woff2",
+        include_bytes!("../web/fonts/inter-latin-wght-italic.woff2"),
+    ),
+    (
+        "fonts/inter-latin-wght-normal.woff2",
+        include_bytes!("../web/fonts/inter-latin-wght-normal.woff2"),
+    ),
+    (
+        "fonts/lexend-latin-ext-wght-normal.woff2",
+        include_bytes!("../web/fonts/lexend-latin-ext-wght-normal.woff2"),
+    ),
+    (
+        "fonts/lexend-latin-wght-normal.woff2",
+        include_bytes!("../web/fonts/lexend-latin-wght-normal.woff2"),
+    ),
+    (
+        "fonts/literata-latin-ext-wght-italic.woff2",
+        include_bytes!("../web/fonts/literata-latin-ext-wght-italic.woff2"),
+    ),
+    (
+        "fonts/literata-latin-ext-wght-normal.woff2",
+        include_bytes!("../web/fonts/literata-latin-ext-wght-normal.woff2"),
+    ),
+    (
+        "fonts/literata-latin-wght-italic.woff2",
+        include_bytes!("../web/fonts/literata-latin-wght-italic.woff2"),
+    ),
+    (
+        "fonts/literata-latin-wght-normal.woff2",
+        include_bytes!("../web/fonts/literata-latin-wght-normal.woff2"),
+    ),
+    (
+        "fonts/merriweather-latin-ext-wght-italic.woff2",
+        include_bytes!("../web/fonts/merriweather-latin-ext-wght-italic.woff2"),
+    ),
+    (
+        "fonts/merriweather-latin-ext-wght-normal.woff2",
+        include_bytes!("../web/fonts/merriweather-latin-ext-wght-normal.woff2"),
+    ),
+    (
+        "fonts/merriweather-latin-wght-italic.woff2",
+        include_bytes!("../web/fonts/merriweather-latin-wght-italic.woff2"),
+    ),
+    (
+        "fonts/merriweather-latin-wght-normal.woff2",
+        include_bytes!("../web/fonts/merriweather-latin-wght-normal.woff2"),
+    ),
+    (
+        "fonts/source-serif-4-latin-ext-wght-italic.woff2",
+        include_bytes!("../web/fonts/source-serif-4-latin-ext-wght-italic.woff2"),
+    ),
+    (
+        "fonts/source-serif-4-latin-ext-wght-normal.woff2",
+        include_bytes!("../web/fonts/source-serif-4-latin-ext-wght-normal.woff2"),
+    ),
+    (
+        "fonts/source-serif-4-latin-wght-italic.woff2",
+        include_bytes!("../web/fonts/source-serif-4-latin-wght-italic.woff2"),
+    ),
+    (
+        "fonts/source-serif-4-latin-wght-normal.woff2",
+        include_bytes!("../web/fonts/source-serif-4-latin-wght-normal.woff2"),
+    ),
+];
 const FONT_LATIN: &[u8] = include_bytes!("../web/fonts/roboto-flex-latin.woff2");
 const FONT_LATIN_EXT: &[u8] = include_bytes!("../web/fonts/roboto-flex-latin-ext.woff2");
 
@@ -136,6 +264,17 @@ async fn index_handler() -> Response {
 }
 
 async fn static_handler(Path(ad): Path<String>) -> Result<Response, AppError> {
+    if let Some((_, bytes)) = RPFONTS.iter().find(|(n, _)| *n == ad) {
+        return Ok((
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, "font/woff2"),
+                (header::CACHE_CONTROL, "public, max-age=86400"),
+            ],
+            *bytes,
+        )
+            .into_response());
+    }
     let (bytes, content_type, cache_control): (&[u8], &'static str, &'static str) =
         match ad.as_str() {
             "app.js" => (
@@ -168,6 +307,28 @@ async fn static_handler(Path(ad): Path<String>) -> Result<Response, AppError> {
                 "application/javascript; charset=utf-8",
                 "no-cache",
             ),
+            "calc.js" => (
+                CALC_JS.as_bytes(),
+                "application/javascript; charset=utf-8",
+                "no-cache",
+            ),
+            "reader-ui.js" => (
+                READER_UI_JS.as_bytes(),
+                "application/javascript; charset=utf-8",
+                "no-cache",
+            ),
+            "reader-fonts.css" => (
+                READER_FONTS_CSS.as_bytes(),
+                "text/css; charset=utf-8",
+                "no-cache",
+            ),
+            "manifest.webmanifest" => (
+                MANIFEST.as_bytes(),
+                "application/manifest+json",
+                "no-cache",
+            ),
+            "icon-192.png" => (ICON_192, "image/png", "public, max-age=86400"),
+            "icon-512.png" => (ICON_512, "image/png", "public, max-age=86400"),
             "style.css" => (STYLE_CSS.as_bytes(), "text/css; charset=utf-8", "no-cache"),
             "frame.css" => (FRAME_CSS.as_bytes(), "text/css; charset=utf-8", "no-cache"),
             "favicon.svg" => (
