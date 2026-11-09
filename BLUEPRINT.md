@@ -1471,3 +1471,23 @@ Uygulama adı bu turda DEĞİŞTİRİLMEZ.
    - `web/stats.js`: hedef kaydetme sonrası yeniden çizimin temizleme işlevi rota temizliğine kaydedilir, öncekini çağırır.
 
 Bilerek düzeltilmeyenler: hesap kilitleme tasarımı, ilk pingde süreyi kendi lehine şişirme, şifreli RAR'ın bozuk görünmesi, offset sayfalamada tarama sırasında tekrar eden kart, `krs.theme` göçü (kullanıcı yok), yayın imajının yeniden derlenmesi.
+
+---
+
+## 19. Ad değişikliği: ReadCrab (önceki bölümlerle çelişirse bu bölüm kazanır)
+
+Depo `mustafabayramguven/ReadCrab` olarak yeniden adlandırıldı. Görünen ad `ReadCrab`.
+
+Değişir:
+- Arayüz: `web/index.html` başlığı, giriş/kurulum ekranı, üst çubuk, e2e beklentileri, `tests/` ve `scripts/smoke.sh` içindeki metin denetimi (`ReadCrab`).
+- Rust: paket ve ikili adı `readcrab`, kütüphane yolu `readcrab::` (`kavita_rs::` kullanan tüm testler ve `main.rs`). `Cargo.lock` içindeki paket adı aynı commit'te elle güncellenir (`--locked` kırılmasın).
+- `Dockerfile`: ikili yolu, `ENTRYPOINT`, `HEALTHCHECK`.
+- CI: imaj `ghcr.io/mustafabayramguven/readcrab:latest`, yerel etiket `readcrab:ci`.
+- `docker-compose.yml`: servis `readcrab`, imaj, volume `readcrab-data`.
+- Veritabanı dosyası `DATA_DIR/readcrab.db` (gerçek kullanıcı verisi yok, göç gerekmez). README buna göre.
+- README başlığı, kurulum komutları, depo bağlantıları.
+- e2e metin fixture'ı (`make_books.py`) ve `web/favicon.svg` yorumları varsa.
+
+Değişmez: `window.KRS`, `krs_session`, `krs.*` localStorage anahtarları, geçmiş commit'ler, `BLUEPRINT.md`'nin önceki bölümleri. README'de "Kavita ile bağlantısı yoktur" notu kalır; `LICENSE` aynı kalır.
+
+Eski `ghcr.io/mustafabayramguven/kavita-rs` paketine dokunulmaz.
