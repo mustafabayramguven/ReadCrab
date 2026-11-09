@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use kavita_rs::{
+use readcrab::{
     app::{build_app, AppState},
     auth::{unix_now, LoginLimiter},
     config::Config,
@@ -66,7 +66,7 @@ async fn main() {
         std::process::exit(2);
     }
 
-    let db_path = cfg.data_dir.join("kavita.db");
+    let db_path = cfg.data_dir.join("readcrab.db");
     let db = Db::open(&db_path).unwrap_or_else(|e| {
         eprintln!(
             "Veritabanı açılamadı ({}): {e}. Dizinin uid 10001 kullanıcısı için yazılabilir olduğundan emin olun.",
@@ -99,7 +99,7 @@ async fn main() {
         }
     });
 
-    std::sync::LazyLock::force(&kavita_rs::auth::DUMMY_HASH);
+    std::sync::LazyLock::force(&readcrab::auth::DUMMY_HASH);
     start_scan(state.clone());
 
     let app = build_app(state);
@@ -112,7 +112,7 @@ async fn main() {
             std::process::exit(1);
         });
 
-    tracing::info!("kavita-rs dinliyor: {addr}");
+    tracing::info!("ReadCrab dinliyor: {addr}");
     if let Err(e) = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),

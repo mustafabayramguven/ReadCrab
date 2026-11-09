@@ -37,7 +37,7 @@ done
 
 # 4: kök sayfa
 body="$(curl -fsS "$BASE/")" || fail "GET / başarısız"
-case "$body" in *kavita-rs*) ;; *) fail "GET / gövdesinde kavita-rs yok" ;; esac
+case "$body" in *ReadCrab*) ;; *) fail "GET / gövdesinde ReadCrab yok" ;; esac
 
 # 5: kimliksiz /api/me 401
 code="$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/me")"

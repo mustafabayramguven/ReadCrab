@@ -40,11 +40,11 @@ jobs:
         with:
           push: false
           load: true
-          tags: kavita-rs:ci
+          tags: readcrab:ci
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha
-      - run: bash scripts/smoke.sh kavita-rs:ci
+      - run: bash scripts/smoke.sh readcrab:ci
 
   e2e:
     needs: image
@@ -60,14 +60,14 @@ jobs:
         with:
           push: false
           load: true
-          tags: kavita-rs:ci
+          tags: readcrab:ci
           platforms: linux/amd64
           cache-from: type=gha
       - run: |
           docker volume create e2e-data
           mkdir /tmp/e2e-books
           python3 -I scripts/e2e/make_books.py /tmp/e2e-books
-          docker run -d --name e2e -p 3435:3435 -v e2e-data:/data -v /tmp/e2e-books:/books:ro kavita-rs:ci
+          docker run -d --name e2e -p 3435:3435 -v e2e-data:/data -v /tmp/e2e-books:/books:ro readcrab:ci
           for i in $(seq 1 30); do
             if [ "$(curl -fsS http://127.0.0.1:3435/health 2>/dev/null || true)" = "ok" ]; then
               break
@@ -116,6 +116,6 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           push: true
-          tags: ghcr.io/mustafabayramguven/kavita-rs:latest
+          tags: ghcr.io/mustafabayramguven/readcrab:latest
           platforms: linux/amd64
           cache-from: type=gha

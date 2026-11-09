@@ -5,7 +5,7 @@ use axum::{
     http::{header, Request, StatusCode},
 };
 use common::{body_json, login_as_admin, make_cbz, make_epub, png, test_app, EpubOpts};
-use kavita_rs::scan::scan_once;
+use readcrab::scan::scan_once;
 use tower::ServiceExt;
 
 async fn setup_two_books(dirs: &common::TempDirs) -> (i64, i64) {

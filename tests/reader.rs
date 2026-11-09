@@ -9,7 +9,7 @@ use common::{
     png, test_app, EpubOpts,
 };
 use http_body_util::BodyExt;
-use kavita_rs::{formats::sanitize::FRAME_CSP, scan::scan_once};
+use readcrab::{formats::sanitize::FRAME_CSP, scan::scan_once};
 use tower::ServiceExt;
 
 async fn book_id_by_rel(dirs: &common::TempDirs, rel: &str) -> i64 {

@@ -5,7 +5,7 @@ use axum::{
     http::{header, Request, StatusCode},
 };
 use common::{body_json, login_as_admin, make_cbz, png, test_app};
-use kavita_rs::{app::APP_CSP, safepath::resolve_book_path, scan::scan_once};
+use readcrab::{app::APP_CSP, safepath::resolve_book_path, scan::scan_once};
 use tower::ServiceExt;
 
 #[test]

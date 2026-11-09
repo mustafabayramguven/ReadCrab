@@ -7,7 +7,7 @@ use common::{
     body_json, make_cbz, make_epub, make_epub_drm, make_epub_malicious, make_mobi,
     make_mobi_with_encryption, make_tar_as_cbr, png, EpubOpts,
 };
-use kavita_rs::{
+use readcrab::{
     error::AppError,
     formats::{
         comic::{

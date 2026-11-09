@@ -337,7 +337,7 @@
 
     navRail = el('nav', { className: 'nav-rail', 'aria-label': 'Kenar gezinti' });
     topBarBack = el('div');
-    topBarTitle = el('h1', { className: 'top-app-bar-title', text: 'kavita-rs' });
+    topBarTitle = el('h1', { className: 'top-app-bar-title', text: 'ReadCrab' });
     topBarActions = el('div', { className: 'chip-group' });
     topBar = el('header', { className: 'top-app-bar' }, [
       topBarBack,
@@ -419,7 +419,7 @@
   function setTopBar(opts) {
     clearNode(topBarBack);
     clearNode(topBarActions);
-    topBarTitle.textContent = (opts && opts.title) || 'kavita-rs';
+    topBarTitle.textContent = (opts && opts.title) || 'ReadCrab';
     if (opts && opts.backHash) {
       topBarBack.appendChild(
         el(
@@ -543,7 +543,7 @@
     );
 
     var card = el('div', { className: 'auth-card' }, [
-      el('h1', { className: 'type-headline-small', text: 'kavita-rs' }),
+      el('h1', { className: 'type-headline-small', text: 'ReadCrab' }),
       el('p', {
         className: 'type-body-medium',
         text: 'İlk yönetici hesabını oluşturun.'
@@ -610,7 +610,7 @@
     );
 
     var card = el('div', { className: 'auth-card' }, [
-      el('h1', { className: 'type-headline-small', text: 'kavita-rs' }),
+      el('h1', { className: 'type-headline-small', text: 'ReadCrab' }),
       el('p', { className: 'type-body-medium', text: 'Oturum açın.' }),
       form
     ]);
@@ -621,7 +621,7 @@
   function renderLibrary(gen) {
     var myGen = gen !== undefined ? gen : KRS.routeGen;
     var active = true;
-    setTopBar({ title: 'kavita-rs' });
+    setTopBar({ title: 'ReadCrab' });
     clearNode(mainPage);
 
     var state = {

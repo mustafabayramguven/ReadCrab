@@ -8,7 +8,7 @@ use axum::{
 };
 use common::{body_json, login_as_admin, make_cbz, make_epub, png, test_app, EpubOpts};
 use http_body_util::BodyExt;
-use kavita_rs::scan::scan_once;
+use readcrab::scan::scan_once;
 use tower::ServiceExt;
 
 #[tokio::test]

@@ -1,5 +1,5 @@
 [package]
-name = "kavita-rs"
+name = "readcrab"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.89"
@@ -7,7 +7,7 @@ license = "GPL-3.0-only"
 resolver = "3"
 
 [[bin]]
-name = "kavita-rs"
+name = "readcrab"
 
 [dependencies]
 axum            = { version = "=0.8.4", default-features = false, features = ["http1","json","query","tokio","macros"] }

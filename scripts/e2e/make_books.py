@@ -41,7 +41,7 @@ def build_chapter_xhtml(title, ch_num, with_img):
     paras = []
     for i in range(1, 90):
         paras.append(
-            f"<p>Bölüm {ch_num} paragraf {i}: kavita-rs metin okuyucu uçtan uca "
+            f"<p>Bölüm {ch_num} paragraf {i}: ReadCrab metin okuyucu uçtan uca "
             f"kaydırma ve erişilebilirlik doğrulama metni.</p>"
         )
     img_html = '<p><img src="img1.png" alt="Bölüm görseli"/></p>\n' if with_img else ""

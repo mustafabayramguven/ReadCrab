@@ -1,4 +1,4 @@
-# kavita-rs
+# ReadCrab
 
 Kendi sunucunuzda çalışan çizgi roman ve e-kitap kütüphanesi. Kavita ile bağlantısı yoktur.
 
@@ -17,7 +17,7 @@ Kitaplarınızı `./books` altına koyun; her seri için bir klasör oluşturun.
 | Değişken | Varsayılan | Anlam |
 |---|---|---|
 | `PORT` | `3435` | Dinleme portu, `0.0.0.0` |
-| `DATA_DIR` | `/data` | `kavita.db`, `covers/` |
+| `DATA_DIR` | `/data` | `readcrab.db`, `covers/` |
 | `BOOKS_DIR` | `/books` | Salt okunur kütüphane |
 | `COOKIE_SECURE` | `0` | `1` ise çereze `Secure` eklenir (HTTPS arkasında) |
 | `RUST_LOG` | `info` | tracing filtresi |
@@ -26,7 +26,7 @@ Kitaplarınızı `./books` altına koyun; her seri için bir klasör oluşturun.
 
 - HTTPS arkasında çalıştırıyorsanız `COOKIE_SECURE=1` kullanın.
 - Ters vekil (reverse proxy, ör. Nginx) arkasında çalıştırıyorsanız `proxy_set_header Host $host;` ayarını ekleyin; aksi halde durum değiştiren istekler `Origin`/`Host` uyuşmazlığı nedeniyle `403 csrf` hatası alır.
-- Yönetici parolasını unutursanız kurtarma yolu yoktur; `DATA_DIR/kavita.db` silinerek sıfırdan kurulum yapılır.
+- Yönetici parolasını unutursanız kurtarma yolu yoktur; `DATA_DIR/readcrab.db` silinerek sıfırdan kurulum yapılır.
 - MOBI desteği klasik MOBI içindir. KF8-only/AZW3 dosyaları desteklenmez.
 - EPUB'ın kendi CSS'i uygulanmaz; SVG içindeki kapak görselleri `<img>` olarak gösterilir.
 - RAR/CBR okuma `bsdtar` ile yapılır.

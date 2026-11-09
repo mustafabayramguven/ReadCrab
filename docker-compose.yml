@@ -1,10 +1,10 @@
 services:
-  kavita-rs:
-    image: ghcr.io/mustafabayramguven/kavita-rs:latest
+  readcrab:
+    image: ghcr.io/mustafabayramguven/readcrab:latest
     ports: ["3435:3435"]
     volumes:
       - ./books:/books:ro
-      - kavita-data:/data
+      - readcrab-data:/data
     restart: unless-stopped
 volumes:
-  kavita-data:
+  readcrab-data:

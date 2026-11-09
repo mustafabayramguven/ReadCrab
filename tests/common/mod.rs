@@ -14,7 +14,7 @@ use axum::{
 };
 use http_body_util::BodyExt;
 use image::{ImageFormat, Rgb, RgbImage};
-use kavita_rs::{
+use readcrab::{
     app::{build_app, AppState},
     auth::LoginLimiter,
     config::Config,
@@ -388,7 +388,7 @@ pub async fn test_app_with_secure(cookie_secure: bool) -> (Router, TempDirs) {
     let books_dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(data_dir.path().join("covers")).unwrap();
 
-    let db = Db::open(&data_dir.path().join("kavita.db")).unwrap();
+    let db = Db::open(&data_dir.path().join("readcrab.db")).unwrap();
     let cfg = Config {
         port: 3435,
         data_dir: data_dir.path().to_path_buf(),
