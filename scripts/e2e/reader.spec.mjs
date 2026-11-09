@@ -636,6 +636,8 @@ test('görünüm ve erişilebilirlik', async ({ browser }) => {
 
         if (scr.openAction) {
           await scr.openAction(page);
+          // açılış animasyonu bitmeden ekran görüntüsü alınmaz
+          await page.waitForTimeout(600);
         }
 
         if (scr.name === 'okuyucu-webtoon') {
