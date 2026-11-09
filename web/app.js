@@ -1087,7 +1087,6 @@
 
   function openCoverDialog(book, onSaved) {
     var dlg = el('dialog', { className: 'md-dialog', 'aria-labelledby': 'cover-dlg-title' });
-    var objectUrl = null;
     var fileInput = el('input', {
       type: 'file',
       id: 'cover-file',
@@ -1119,22 +1118,21 @@
     function setMsg(t) {
       msg.textContent = t || '';
     }
-    function releasePreview() {
-      if (objectUrl) {
-        URL.revokeObjectURL(objectUrl);
-        objectUrl = null;
-      }
-    }
-
+    // Önizleme data: adresiyle yapılır; APP_CSP blob: görsellere izin vermez (değişmez).
     fileInput.addEventListener('change', function () {
-      releasePreview();
       setMsg('');
       var f = fileInput.files && fileInput.files[0];
       uploadBtn.disabled = !f;
-      preview.hidden = !f;
-      if (f) {
-        objectUrl = URL.createObjectURL(f);
-        preview.src = objectUrl;
+      preview.hidden = true;
+      if (f && f.size <= 10 * 1024 * 1024) {
+        var rd = new FileReader();
+        rd.onload = function () {
+          if (fileInput.files && fileInput.files[0] === f) {
+            preview.src = String(rd.result);
+            preview.hidden = false;
+          }
+        };
+        rd.readAsDataURL(f);
       }
     });
 
@@ -1202,7 +1200,6 @@
     );
     dlg.appendChild(el('div', { className: 'dialog-actions' }, [removeBtn, closeBtn, uploadBtn]));
     dlg.addEventListener('close', function () {
-      releasePreview();
       dlg.remove();
     });
     document.body.appendChild(dlg);
