@@ -129,7 +129,8 @@ async fn cover_status(
     origin: Option<&str>,
 ) -> StatusCode {
     let body = png(4, 4, [1, 2, 3]);
-    common::raw(app, "PUT", uri, cookie, ct, origin, body).await.0
+    let (st, _) = common::raw(app, "PUT", uri, cookie, ct, origin, body).await;
+    st
 }
 
 #[tokio::test]
