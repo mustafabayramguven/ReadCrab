@@ -120,7 +120,7 @@ pub fn strip_tags(html: &str) -> String {
 }
 
 fn slice(text: &[char], a: usize, b: usize) -> String {
-    text[a..b].iter().collect::<String>().trim().to_string()
+    text[a..b].iter().collect()
 }
 
 pub struct Collector {
@@ -167,9 +167,14 @@ impl Collector {
             self.results.push(SearchHit {
                 ch,
                 p: (i as f64 / text.len() as f64 * 1e6).round() / 1e6,
-                before: slice(&text, i.saturating_sub(CONTEXT), i),
+                // dış uçlar kırpılır, hit ile bitişik boşluk korunur
+                before: slice(&text, i.saturating_sub(CONTEXT), i)
+                    .trim_start()
+                    .to_string(),
                 hit: slice(&text, i, end),
-                after: slice(&text, end, (end + CONTEXT).min(text.len())),
+                after: slice(&text, end, (end + CONTEXT).min(text.len()))
+                    .trim_end()
+                    .to_string(),
             });
             i = end;
         }
@@ -197,7 +202,7 @@ mod tests {
         assert_eq!(c.results.len(), 3);
         assert_eq!(c.results[0].hit, "IŞIK");
         assert_eq!(c.results[0].ch, 2);
-        assert_eq!(c.results[1].before, "IŞIK ve");
+        assert_eq!(c.results[1].before, "IŞIK ve ");
         let mut c = Collector::new("aa");
         c.add_chapter(0, "<p>aaaaa</p>");
         assert_eq!(c.results.len(), 2);

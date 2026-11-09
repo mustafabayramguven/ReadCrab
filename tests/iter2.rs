@@ -235,7 +235,7 @@ async fn search_epub_turkish_fold() {
     assert_eq!(r[0]["p"], 0.0);
     assert_eq!(r[0]["hit"], "İkinci");
     assert_eq!(r[0]["before"], "");
-    assert_eq!(r[1]["before"], "İkinci Bölüm");
+    assert_eq!(r[1]["before"], "İkinci Bölüm ");
     assert_eq!(v["truncated"], false);
 
     // b.epub: <p> içi bulunur, <title> bulunmaz; ışık/IŞIK/İŞİK eşdeğer
