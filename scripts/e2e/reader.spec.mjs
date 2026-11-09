@@ -1226,7 +1226,8 @@ test('okumaya devam et rafı', async ({ browser }) => {
     bodyOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth
   }));
   expect(dims.sw).toBeGreaterThan(dims.cw);
-  expect(dims.snap).toBe('x proximity');
+  // Chromium varsayılan 'proximity' sözcüğünü hesaplı değerde yazmaz ('x')
+  expect(dims.snap).toMatch(/^x( proximity)?$/);
   expect(dims.bodyOverflow).toBe(false);
   let focused = false;
   for (let i = 0; i < 40 && !focused; i++) {
