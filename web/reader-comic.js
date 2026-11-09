@@ -580,7 +580,12 @@
       clearErrBox();
       stage.className = 'reader-stage webtoon-mode';
       if (pageImg.parentNode) stage.removeChild(pageImg);
-      webtoon = el('div', { className: 'webtoon', tabindex: '-1' });
+      webtoon = el('div', {
+        className: 'webtoon',
+        role: 'region',
+        'aria-label': 'Dikey okuma',
+        tabindex: '0'
+      });
       holders = [];
       for (var i = 0; i < total; i++) {
         var node = el('div', { className: 'webtoon-page', 'data-idx': String(i) });

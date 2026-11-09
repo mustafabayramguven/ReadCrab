@@ -376,6 +376,12 @@
       st.setProperty('--align', prefs.align);
       st.setProperty('--hyph', prefs.align === 'justify' ? 'auto' : 'manual');
       root.classList.toggle('paged', isPaged());
+      // yatay kaydırılan belge klavye erişimi için odaklanabilir olmalı
+      if (isPaged()) {
+        root.setAttribute('tabindex', '0');
+      } else {
+        root.removeAttribute('tabindex');
+      }
     }
 
     // Sayfa/kaydırma düzenini yeniden hesaplar ve konumu curRatio ile korur.

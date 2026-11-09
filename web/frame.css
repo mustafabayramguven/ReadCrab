@@ -38,6 +38,10 @@ html.paged {
   touch-action: pan-x;
 }
 
+html.paged:focus {
+  outline: none;
+}
+
 html.paged::-webkit-scrollbar {
   display: none;
 }
