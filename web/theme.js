@@ -170,7 +170,7 @@
     );
   }
 
-  function generatePalette(seedHex, dark) {
+  function generatePalette(seedHex, dark, black) {
     var o = hexToOklch(seedHex);
     var h0 = o.h;
     var Cp = clamp(o.C, 0.05, 0.17);
@@ -223,7 +223,7 @@
       };
     }
 
-    return {
+    var pal = {
       'primary': tn(P, 80),
       'on-primary': tn(P, 20),
       'primary-container': tn(P, 30),
@@ -257,14 +257,25 @@
       'inverse-primary': tn(P, 40),
       'scrim': '#000000'
     };
+    if (black) {
+      pal['surface'] = '#000000';
+      pal['surface-dim'] = '#000000';
+      pal['surface-container-lowest'] = '#000000';
+      pal['surface-container-low'] = tn(N, 6);
+      pal['surface-container'] = tn(N, 9);
+      pal['surface-container-high'] = tn(N, 13);
+      pal['surface-container-highest'] = tn(N, 17);
+      pal['surface-bright'] = tn(N, 20);
+    }
+    return pal;
   }
 
   function readerColors(name, seedHex) {
     if (name === 'sepia') {
       return { bg: '#F4ECD8', fg: '#433422', link: '#7A4A12' };
     }
-    var dark = name === 'dark';
-    var p = generatePalette(seedHex || getSeed(), dark);
+    var dark = name === 'dark' || name === 'black';
+    var p = generatePalette(seedHex || getSeed(), dark, name === 'black');
     return {
       bg: p['surface'],
       fg: p['on-surface'],
@@ -296,6 +307,14 @@
     }
   }
 
+  function getBlack() {
+    try {
+      return localStorage.getItem('krs.black') === '1';
+    } catch (_) {
+      return false;
+    }
+  }
+
   function getMotion() {
     try {
       return localStorage.getItem('krs.motion') === 'reduced';
@@ -312,13 +331,19 @@
       window.matchMedia &&
       window.matchMedia('(prefers-color-scheme: dark)').matches;
     var dark = m === 'dark' || (m === 'auto' && prefersDark);
-    var pal = generatePalette(s, dark);
+    var black = dark && getBlack();
+    var pal = generatePalette(s, dark, black);
     var root = document.documentElement;
     var keys = Object.keys(pal);
     for (var i = 0; i < keys.length; i++) {
       root.style.setProperty('--md-sys-color-' + keys[i], pal[keys[i]]);
     }
     root.dataset.theme = dark ? 'dark' : 'light';
+    if (black) {
+      root.dataset.black = '1';
+    } else {
+      delete root.dataset.black;
+    }
     root.style.colorScheme = dark ? 'dark' : 'light';
     var meta = document.querySelector('meta[name="theme-color"]');
     if (meta) {
@@ -340,6 +365,13 @@
       localStorage.setItem('krs.mode', mode);
     } catch (_) {}
     apply(getSeed(), mode);
+  }
+
+  function setBlack(on) {
+    try {
+      localStorage.setItem('krs.black', on ? '1' : '0');
+    } catch (_) {}
+    apply(getSeed(), getMode());
   }
 
   function setMotion(reduced) {
@@ -396,7 +428,9 @@
     setMotion: setMotion,
     getSeed: getSeed,
     getMode: getMode,
-    getMotion: getMotion
+    getMotion: getMotion,
+    getBlack: getBlack,
+    setBlack: setBlack
   };
 
   if (typeof window !== 'undefined') {

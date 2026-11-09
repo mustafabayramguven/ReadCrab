@@ -123,4 +123,49 @@ for (const seed of SEEDS) {
   }
 }
 
+// 7. saf siyah: 6 tohum için koyu + siyah palet
+const darkRoles = (seed) => generatePalette(seed.hex, true, true);
+const containers = [
+  'surface-container-lowest', 'surface-container-low', 'surface-container',
+  'surface-container-high', 'surface-container-highest', 'surface-bright'
+];
+for (const seed of SEEDS) {
+  const pal = darkRoles(seed);
+  assert.equal(pal['surface'], '#000000');
+  assert.equal(pal['surface-dim'], '#000000');
+  assert.equal(pal['surface-container-lowest'], '#000000');
+  for (const c of ['surface', ...containers]) {
+    const r = contrast(pal['on-surface'], pal[c]);
+    assert.ok(r >= 7, `black on-surface/${c} < 7 for ${seed.hex}: ${r}`);
+  }
+  for (const c of ['surface', 'surface-container', 'surface-container-high']) {
+    const r = contrast(pal['on-surface-variant'], pal[c]);
+    assert.ok(r >= 4.5, `black on-surface-variant/${c} < 4.5 for ${seed.hex}: ${r}`);
+  }
+  for (const [fg, bg] of [
+    ['on-primary', 'primary'],
+    ['on-primary-container', 'primary-container'],
+    ['on-secondary-container', 'secondary-container'],
+    ['on-tertiary-container', 'tertiary-container'],
+    ['on-error-container', 'error-container']
+  ]) {
+    const r = contrast(pal[fg], pal[bg]);
+    assert.ok(r >= 4.5, `black ${fg}/${bg} < 4.5 for ${seed.hex}: ${r}`);
+  }
+  assert.notEqual(pal['surface-container-high'], pal['surface']);
+  assert.ok(luminance(pal['surface-container-high']) > luminance(pal['surface']));
+  // black=false çıktısı mevcut koyu palet ile birebir aynı
+  assert.deepEqual(generatePalette(seed.hex, true, false), generatePalette(seed.hex, true));
+  const plain = generatePalette(seed.hex, true);
+  for (const k of Object.keys(plain)) {
+    if (!['surface', 'surface-dim', 'surface-bright', ...containers].includes(k)) {
+      assert.equal(pal[k], plain[k], `black değiştirmemeli: ${k}`);
+    }
+  }
+  // açık temada siyah bayrağı etkisiz
+  assert.deepEqual(generatePalette(seed.hex, false, true), generatePalette(seed.hex, false));
+}
+assert.equal(readerColors('black').bg, '#000000');
+assert.ok(contrast(readerColors('black').fg, readerColors('black').bg) >= 7);
+
 console.log('theme.test.mjs: tüm testler başarılı');

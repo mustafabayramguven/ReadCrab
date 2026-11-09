@@ -27,6 +27,7 @@ jobs:
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: for f in web/*.js; do node --check "$f"; done
       - run: node web/theme.test.mjs
+      - run: node web/calc.test.mjs
       - run: cargo test --locked
 
   image:
