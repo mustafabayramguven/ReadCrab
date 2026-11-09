@@ -3,6 +3,13 @@ mod common;
 use axum::http::StatusCode;
 use common::{call, create_user_cookie, login_as_admin, seed_books, test_app, user_id};
 
+async fn exec(dirs: &common::TempDirs, sql: String) {
+    dirs.db
+        .run(move |c| Ok(c.execute_batch(&sql)?))
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn bookmarks_lifecycle() {
     let (app, dirs) = test_app().await;
@@ -42,7 +49,9 @@ async fn bookmarks_lifecycle() {
     // geçersiz gövdeler
     let long_loc = "x".repeat(201);
     let long_label = "y".repeat(121);
-    for (loc, label) in [("", "a"), (long_loc.as_str(), "a"), ("1", "  "), ("1", &long_label)] {
+    let (ll, lb) = (long_loc.as_str(), long_label.as_str());
+    let cases = [("", "a"), (ll, "a"), ("1", "  "), ("1", lb)];
+    for (loc, label) in cases {
         let b = format!(r#"{{"locator":"{loc}","label":"{label}"}}"#);
         let (st, _) = call(&app, "POST", &uri, &admin, Some(&b)).await;
         assert_eq!(st, StatusCode::BAD_REQUEST, "{loc}/{label}");
@@ -52,14 +61,13 @@ async fn bookmarks_lifecycle() {
     let (st, _) = call(&app, "GET", "/api/books/9999/bookmarks", &admin, None).await;
     assert_eq!(st, StatusCode::NOT_FOUND);
     let missing = seed_books(&dirs, "M", 1).await[0];
-    dirs.db
-        .run(move |c| Ok(c.execute("UPDATE books SET missing=1 WHERE id=?1", [missing])?))
-        .await
-        .unwrap();
+    let sql = format!("UPDATE books SET missing=1 WHERE id={missing}");
+    exec(&dirs, sql).await;
     let uri_m = format!("/api/books/{missing}/bookmarks");
     let (st, _) = call(&app, "GET", &uri_m, &admin, None).await;
     assert_eq!(st, StatusCode::NOT_FOUND);
-    let (st, _) = call(&app, "POST", &uri_m, &admin, Some(r#"{"locator":"1","label":"a"}"#)).await;
+    let ok_body = r#"{"locator":"1","label":"a"}"#;
+    let (st, _) = call(&app, "POST", &uri_m, &admin, Some(ok_body)).await;
     assert_eq!(st, StatusCode::NOT_FOUND);
 
     // 100 sınırı: 101. kayıt 409
@@ -85,9 +93,6 @@ async fn bookmarks_lifecycle() {
         }
     };
     assert_eq!(count(&dirs).await, 1);
-    dirs.db
-        .run(move |c| Ok(c.execute("DELETE FROM users WHERE id = ?1", [other_id])?))
-        .await
-        .unwrap();
+    exec(&dirs, format!("DELETE FROM users WHERE id = {other_id}")).await;
     assert_eq!(count(&dirs).await, 0);
 }

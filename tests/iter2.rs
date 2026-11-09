@@ -57,7 +57,8 @@ async fn book_detail_next_prev_and_pace() {
     let admin = login_as_admin(&app).await;
     let ids = seed_books(&dirs, "S", 4).await;
     // 3. cilt hatalı: atlanmalı
-    exec(&dirs, format!("UPDATE books SET error='corrupt' WHERE id={};", ids[2])).await;
+    let sql = format!("UPDATE books SET error='corrupt' WHERE id={};", ids[2]);
+    exec(&dirs, sql).await;
 
     let get = |id: i64| {
         let app = app.clone();
