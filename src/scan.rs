@@ -256,6 +256,21 @@ async fn process_single_book(state: &AppState, disc: &DiscoveredFile, covers_dir
         return;
     };
 
+    let custom: i64 = state
+        .db
+        .run(move |conn| {
+            Ok(conn.query_row(
+                "SELECT custom_cover FROM books WHERE id = ?1",
+                [book_id],
+                |r| r.get(0),
+            )?)
+        })
+        .await
+        .unwrap_or(0);
+    if custom == 1 {
+        return;
+    }
+
     let has_cover = if err_str.is_none() {
         let row = BookRow {
             id: book_id,

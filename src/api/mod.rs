@@ -5,6 +5,7 @@ use crate::app::AppState;
 pub mod admin;
 pub mod auth;
 pub mod bookmarks;
+pub mod cover;
 pub mod library;
 pub mod reader;
 pub mod stats;
@@ -16,6 +17,7 @@ pub fn router() -> Router<AppState> {
         .merge(admin::router())
         .merge(library::router())
         .merge(bookmarks::router())
+        .merge(cover::router())
         .merge(reader::router())
         .merge(tracking::router())
         .merge(stats::router())

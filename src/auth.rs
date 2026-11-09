@@ -308,6 +308,10 @@ pub async fn origin_and_content_type_guard(req: Request, next: Next) -> Response
         Method::POST | Method::PUT | Method::DELETE | Method::PATCH
     );
 
+    let is_cover_put = *req.method() == Method::PUT
+        && req.uri().path().starts_with("/api/books/")
+        && req.uri().path().ends_with("/cover");
+
     if is_mutating {
         if let Some(origin_val) = req.headers().get(header::ORIGIN) {
             let Ok(origin_str) = origin_val.to_str() else {
@@ -335,7 +339,16 @@ pub async fn origin_and_content_type_guard(req: Request, next: Next) -> Response
             .get(header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.split(';').next())
-            .is_some_and(|m| m.trim().eq_ignore_ascii_case("application/json"));
+            .map(str::trim)
+            .is_some_and(|m| {
+                if is_cover_put {
+                    ["image/jpeg", "image/png", "image/webp"]
+                        .iter()
+                        .any(|t| m.eq_ignore_ascii_case(t))
+                } else {
+                    m.eq_ignore_ascii_case("application/json")
+                }
+            });
 
         if !ct_ok {
             return AppError::UnsupportedMedia.into_response();

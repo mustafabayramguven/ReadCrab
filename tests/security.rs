@@ -120,3 +120,36 @@ async fn security_headers_present() {
         );
     }
 }
+
+#[tokio::test]
+async fn cover_put_content_type_and_origin_guard() {
+    let (app, _dirs) = test_app().await;
+    let cookie = login_as_admin(&app).await;
+    let cover = "/api/books/1/cover";
+    let body = png(4, 4, [1, 2, 3]);
+
+    let send = |method: &'static str, uri: &'static str, ct: &'static str, origin| {
+        let (app, cookie, body) = (app.clone(), cookie.clone(), body.clone());
+        async move { common::raw(&app, method, uri, &cookie, ct, origin, body).await.0 }
+    };
+    assert_eq!(
+        send("PUT", cover, "text/plain", None).await,
+        StatusCode::UNSUPPORTED_MEDIA_TYPE
+    );
+    assert_eq!(
+        send("PUT", cover, "image/gif", None).await,
+        StatusCode::UNSUPPORTED_MEDIA_TYPE
+    );
+    assert_eq!(
+        send("PUT", cover, "application/json", None).await,
+        StatusCode::UNSUPPORTED_MEDIA_TYPE
+    );
+    assert_eq!(
+        send("PUT", "/api/books/1/status", "image/png", None).await,
+        StatusCode::UNSUPPORTED_MEDIA_TYPE
+    );
+    assert_eq!(
+        send("PUT", cover, "image/png", Some("http://evil.example")).await,
+        StatusCode::FORBIDDEN
+    );
+}

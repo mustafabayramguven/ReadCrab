@@ -1,6 +1,6 @@
 use std::{io::Cursor, path::Path};
 
-use image::{codecs::jpeg::JpegEncoder, ImageReader, Limits};
+use image::{codecs::jpeg::JpegEncoder, ImageFormat, ImageReader, Limits, Rgb, RgbImage};
 
 use crate::{
     formats::{
@@ -112,6 +112,55 @@ fn resize_and_save_jpeg(raw_bytes: &[u8], out_path: &Path) -> bool {
         }
     }
     std::fs::write(out_path, jpeg_buf).is_ok()
+}
+
+/// Yüklenen kapağı çözer, alfayı beyaza birleştirir, 600 pikselden geniş ise küçültür ve JPEG (q85) üretir.
+#[allow(clippy::result_unit_err)]
+pub fn encode_custom_cover(raw: &[u8]) -> Result<Vec<u8>, ()> {
+    let reader = ImageReader::new(Cursor::new(raw))
+        .with_guessed_format()
+        .map_err(|_| ())?;
+    if !matches!(
+        reader.format(),
+        Some(ImageFormat::Jpeg | ImageFormat::Png | ImageFormat::WebP)
+    ) {
+        return Err(());
+    }
+    let mut reader = reader;
+    let mut limits = Limits::default();
+    limits.max_alloc = Some(256 * 1024 * 1024);
+    limits.max_image_width = Some(16384);
+    limits.max_image_height = Some(16384);
+    reader.limits(limits);
+    let (w, h) = ImageReader::new(Cursor::new(raw))
+        .with_guessed_format()
+        .map_err(|_| ())?
+        .into_dimensions()
+        .map_err(|_| ())?;
+    if w == 0 || h == 0 || u64::from(w) * u64::from(h) > MAX_PIXELS {
+        return Err(());
+    }
+    let img = reader.decode().map_err(|_| ())?;
+
+    let rgba = img.to_rgba8();
+    let mut rgb = RgbImage::new(w, h);
+    for (x, y, px) in rgba.enumerate_pixels() {
+        let a = u32::from(px[3]);
+        let mix = |c: u8| ((u32::from(c) * a + 255 * (255 - a) + 127) / 255) as u8;
+        rgb.put_pixel(x, y, Rgb([mix(px[0]), mix(px[1]), mix(px[2])]));
+    }
+    let rgb = if w > 600 {
+        let new_h = ((u64::from(h) * 600) / u64::from(w)).max(1) as u32;
+        image::imageops::thumbnail(&rgb, 600, new_h)
+    } else {
+        rgb
+    };
+
+    let mut out = Vec::new();
+    JpegEncoder::new_with_quality(&mut out, 85)
+        .encode_image(&rgb)
+        .map_err(|_| ())?;
+    Ok(out)
 }
 
 #[cfg(test)]

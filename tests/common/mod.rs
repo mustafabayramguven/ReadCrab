@@ -553,3 +553,33 @@ pub fn make_epub_html(dir: &Path, name: &str, chapter: &str) -> PathBuf {
         ],
     )
 }
+
+/// Ham istek: boş olmayan `ct` Content-Type olur; `origin` verilirse Origin başlığı eklenir.
+pub async fn raw(
+    app: &Router,
+    method: &str,
+    uri: &str,
+    cookie: &str,
+    ct: &str,
+    origin: Option<&str>,
+    body: Vec<u8>,
+) -> (StatusCode, Vec<u8>) {
+    let mut b = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::COOKIE, cookie);
+    if !ct.is_empty() {
+        b = b.header(header::CONTENT_TYPE, ct);
+    }
+    if let Some(o) = origin {
+        b = b.header(header::ORIGIN, o);
+    }
+    let res = app
+        .clone()
+        .oneshot(b.body(Body::from(body)).unwrap())
+        .await
+        .unwrap();
+    let status = res.status();
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    (status, bytes.to_vec())
+}
