@@ -12,9 +12,7 @@ use crate::{
     auth::AdminUser,
     error::AppError,
     formats::{
-        cover::{
-            encode_custom_cover, publish_tmp, render_cover, write_tmp, BookRow, COVER_ENCODE,
-        },
+        cover::{encode_custom_cover, publish_tmp, render_cover, write_tmp, BookRow, COVER_ENCODE},
         Format,
     },
 };

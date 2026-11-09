@@ -1047,13 +1047,20 @@ test('yer imi, arama ve sonraki cilt', async ({ browser }) => {
   await expect(page.locator('dialog[open]')).toHaveCount(0);
   await expect(page.locator('#text-indicator')).not.toHaveText(beforeText || '');
 
-  // sonraki cilt: son bölümün sonunda kart
+  // sonraki cilt: Cilt 1'in son bölümü tek paragraflıktır; girilince kitap %100 olur
   await page.keyboard.press(']');
   await expect(frame.locator('h1')).toContainText('Bölüm 2');
-  await frame.locator('html').evaluate(() => {
-    const se = document.scrollingElement;
-    se.scrollTop = se.scrollHeight;
-  });
+  await page.keyboard.press(']');
+  await expect(frame.locator('h1')).toContainText('Bölüm 3');
+  await expect
+    .poll(
+      async () => {
+        const r = await page.request.get(`/api/books/${cilt1}`);
+        return (await r.json()).status;
+      },
+      { timeout: 15000 }
+    )
+    .toBe('finished');
   const nextCard = page.locator('a', { hasText: 'Sonraki cilt: Cilt 2' });
   await expect(nextCard).toBeVisible();
   await nextCard.click();
@@ -1256,6 +1263,16 @@ test('okuma takvimi', async ({ browser }) => {
   await page.goto('/#/gecmis');
   const scroll = page.locator('.heatmap-scroll');
   await expect(scroll).toBeVisible();
+  // 1280 px: ısı haritası kartın genişliğini doldurur (hücre boyutu kap genişliğine göre)
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const svg = document.querySelector('.heatmap-scroll svg');
+        const card = document.querySelector('.heatmap-card');
+        return svg.getBoundingClientRect().width / card.getBoundingClientRect().width;
+      })
+    )
+    .toBeGreaterThanOrEqual(0.85);
   const today = await page.evaluate(() => window.KRS.todayLocal());
   const cell = page.locator(`rect.hm-cell[data-date="${today}"]`);
   await expect(cell).toHaveCount(1);
@@ -1296,16 +1313,184 @@ test('okuma takvimi', async ({ browser }) => {
   await expect(page.locator('.rhythm-empty')).toHaveText('Bu yıl için veri yok');
   await expect(page.locator('.heatmap-body .empty.error')).toHaveCount(0);
 
-  // 360 px: en yeni taraf görünür
+  // 360 px: bu yılda bugünün sütunu görünür; geçmiş yılda en yeni taraf görünür
   await page.setViewportSize({ width: 360, height: 800 });
   await page.locator('#heatmap-year').selectOption(String(new Date().getFullYear()));
   await expect(cell).toHaveCount(1);
+  await expect
+    .poll(() =>
+      page.evaluate((d) => {
+        const sc = document.querySelector('.heatmap-scroll');
+        const c = document.querySelector(`rect.hm-cell[data-date="${d}"]`);
+        const a = sc.getBoundingClientRect();
+        const b = c.getBoundingClientRect();
+        return b.left >= a.left - 1 && b.right <= a.right + 1;
+      }, today)
+    )
+    .toBe(true);
+  expect(await scroll.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
+  await page.locator('#heatmap-year').selectOption('2024');
+  await expect(page.locator('.rhythm-empty')).toBeVisible();
   const edge = await scroll.evaluate((el) => ({
     gap: Math.abs(el.scrollLeft + el.clientWidth - el.scrollWidth),
     overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth
   }));
   expect(edge.gap).toBeLessThanOrEqual(2);
   expect(edge.overflow).toBe(false);
+  assertNoCspOrPageErrors(consoleMessages, pageErrors);
+  await context.close();
+});
+
+test('kısa son webtoon sayfası ve kısa son bölüm bitirir', async ({ browser }) => {
+  const { context, page, consoleMessages, pageErrors } = await loginContext(browser, {
+    width: 1280,
+    height: 800
+  });
+  const books = await lookupBooks(context.request);
+  const id = books['dikey'].id;
+  await resetProgress(context.request, id, '0', 0);
+  await page.goto('/#/');
+  await page.evaluate((b) => localStorage.setItem(`krs.cmode.${b}`, 'vertical'), id);
+  await page.goto(`/#/oku/${id}`);
+  await expect(page.locator('.webtoon-page')).toHaveCount(8);
+  // son sayfa 600x300: alta kaydırınca görünür sayfa son sayfadır
+  await expect
+    .poll(
+      async () => {
+        await page.locator('.webtoon').evaluate((el) => {
+          el.scrollTop = el.scrollHeight;
+        });
+        return page.locator('#page-indicator').textContent();
+      },
+      { timeout: 20000 }
+    )
+    .toBe('8 / 8');
+  await expect
+    .poll(
+      async () => {
+        const r = await page.request.get(`/api/books/${id}`);
+        return (await r.json()).status;
+      },
+      { timeout: 15000 }
+    )
+    .toBe('finished');
+  await page.evaluate((b) => localStorage.removeItem(`krs.cmode.${b}`), id);
+  assertNoCspOrPageErrors(consoleMessages, pageErrors);
+  await context.close();
+});
+
+test('bölüm değişirken eski konum kaydedilmez ve yer imi çift eklenmez', async ({ browser }) => {
+  const { context, page, consoleMessages, pageErrors } = await loginContext(browser, {
+    width: 1280,
+    height: 800
+  });
+  const books = await lookupBooks(context.request);
+  const id = books['Cilt 1'].id;
+  await resetProgress(context.request, id, JSON.stringify({ ch: 0, p: 0 }), 0);
+  await page.goto(`/#/oku/${id}`);
+  const frame = page.frameLocator('iframe.reader-frame');
+  await expect(frame.locator('h1')).toContainText('Bölüm 1');
+  await settleFrame(page);
+
+  // kaydırma sürerken bölüm değişir: kaydedilen konum yeni bölümün başıdır
+  await frame.locator('html').evaluate(() => {
+    document.scrollingElement.scrollTop = 600;
+  });
+  await page.keyboard.press(']');
+  await expect(frame.locator('h1')).toContainText('Bölüm 2');
+  await expect
+    .poll(
+      async () => {
+        const r = await page.request.get(`/api/books/${id}/progress`);
+        const j = await r.json();
+        try {
+          const loc = JSON.parse(j.locator);
+          return `${loc.ch}:${loc.p}`;
+        } catch {
+          return j.locator;
+        }
+      },
+      { timeout: 15000 }
+    )
+    .toBe('1:0');
+
+  // çift tıklama tek yer imi oluşturur
+  await page.mouse.move(120, 120);
+  await page.mouse.move(140, 130);
+  const toggle = page.locator('.reader-bar.top button[aria-pressed]');
+  await toggle.dblclick();
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  const count = async () => {
+    const r = await page.request.get(`/api/books/${id}/bookmarks`);
+    return (await r.json()).items.length;
+  };
+  expect(await count()).toBe(1);
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  expect(await count()).toBe(0);
+  assertNoCspOrPageErrors(consoleMessages, pageErrors);
+  await context.close();
+});
+
+test('ayarlar paneli yerleşimi ve canlı önizleme', async ({ browser }) => {
+  const { context, page, consoleMessages, pageErrors } = await loginContext(browser, {
+    width: 1280,
+    height: 800
+  });
+  const books = await lookupBooks(context.request);
+  const id = books['Cilt 1'].id;
+  await resetProgress(context.request, id, JSON.stringify({ ch: 0, p: 0 }), 0);
+  await page.goto(`/#/oku/${id}`);
+  await expect(page.frameLocator('iframe.reader-frame').locator('h1')).toContainText('Bölüm 1');
+  await openReaderSettings(page);
+
+  // >= 840 px: sağa yaslı, 360 px genişliğinde, tam yükseklikte yan panel; arka plan karartılmaz
+  const dlg = page.locator('dialog.reader-settings');
+  await expect
+    .poll(async () => {
+      const b = await dlg.boundingBox();
+      return b ? Math.round(b.x + b.width) : 0;
+    })
+    .toBe(1280);
+  const box = await dlg.boundingBox();
+  expect(Math.round(box.width)).toBe(360);
+  expect(Math.round(box.height)).toBe(800);
+  const backdrop = await dlg.evaluate((el) => getComputedStyle(el, '::backdrop').backgroundColor);
+  expect(['rgba(0, 0, 0, 0)', 'transparent']).toContain(backdrop);
+  // canlı önizleme: panel açıkken yazı boyutu değişir ve çerçeveye uygulanır
+  await page.getByRole('button', { name: 'Yazıyı büyüt (A+)' }).click();
+  expect(
+    await page
+      .frameLocator('iframe.reader-frame')
+      .locator('html')
+      .evaluate(() => getComputedStyle(document.documentElement).fontSize)
+  ).toBe('20px');
+  // dışarı tıklayınca kapanır
+  await page.mouse.click(300, 400);
+  await expect(page.locator('dialog[open]')).toHaveCount(0);
+
+  // < 840 px: alt sayfa, yazı tipleri tek satır yatay kaydırılır, seçili olan görünür
+  await page.setViewportSize({ width: 360, height: 800 });
+  await openReaderSettings(page);
+  await pickRadio(page, 'Lexend');
+  await closeSheet(page);
+  await openReaderSettings(page);
+  const metrics = await page.evaluate(() => {
+    const list = document.querySelector('.font-list');
+    const sel = list.querySelector('[aria-checked="true"]');
+    const lr = list.getBoundingClientRect();
+    const sr = sel.getBoundingClientRect();
+    return {
+      overflow: list.scrollWidth > list.clientWidth,
+      oneRow: list.clientHeight <= sel.getBoundingClientRect().height + 12,
+      visible: sr.left >= lr.left - 1 && sr.right <= lr.right + 1,
+      pageOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth
+    };
+  });
+  expect(metrics.overflow).toBe(true);
+  expect(metrics.oneRow).toBe(true);
+  expect(metrics.visible).toBe(true);
+  expect(metrics.pageOverflow).toBe(false);
   assertNoCspOrPageErrors(consoleMessages, pageErrors);
   await context.close();
 });

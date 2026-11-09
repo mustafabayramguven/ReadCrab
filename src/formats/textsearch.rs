@@ -61,10 +61,7 @@ fn push_decoded(out: &mut String, text: &str, clock: &mut Clock) -> bool {
         rest = &rest[i..];
         // varlık adı için en çok 10 karakter ileri bakılır
         let tail = &rest[1..];
-        let end = tail
-            .char_indices()
-            .nth(10)
-            .map_or(tail.len(), |(k, _)| k);
+        let end = tail.char_indices().nth(10).map_or(tail.len(), |(k, _)| k);
         let window = &tail[..end];
         let decoded = window
             .find(';')

@@ -143,14 +143,19 @@ def build_epub(path):
 
 def build_volume_epub(path, volume):
     """İki bölüm, her bölümde bir PNG; 60 Türkçe paragraf, 30. pakette 'kelime' ve 'şeker'."""
+    # Cilt 1'in sonuna tek paragraflık kısa bir üçüncü bölüm eklenir (21.1)
+    count = 3 if volume == 1 else 2
     chapters = []
-    for n in (1, 2):
+    for n in range(1, count + 1):
         paras = [
             f"<p>Cilt {volume}, bölüm {n}, paragraf {i}: ışık, çiçek ve gölge sözcükleri "
             f"Türkçe okuma testinde kullanılır.</p>"
             for i in range(1, 61)
         ]
         paras[29] = "<p>Bu cümlede kelime ve şeker birlikte geçer.</p>"
+        img_line = f'<p><img src="img{n}.png" alt="Bölüm {n} görseli"/></p>' if n < 3 else ""
+        if n == 3:
+            paras = ["<p>Son kısa bölüm.</p>"]
         chapters.append(
             f"""<?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE html>
@@ -158,12 +163,15 @@ def build_volume_epub(path, volume):
 <head><meta charset="utf-8"/><title>Bölüm {n}</title></head>
 <body>
   <h1>Bölüm {n}</h1>
-  <p><img src="img{n}.png" alt="Bölüm {n} görseli"/></p>
+  {img_line}
   {chr(10).join(paras)}
 </body>
 </html>
 """
         )
+    ch3_item = '<item id="ch3" href="ch3.xhtml" media-type="application/xhtml+xml"/>' if count == 3 else ""
+    ch3_ref = '<itemref idref="ch3"/>' if count == 3 else ""
+    nav_ch3 = '<li><a href="ch3.xhtml">Bölüm 3</a></li>' if count == 3 else ""
     opf = f"""<?xml version="1.0" encoding="utf-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
@@ -175,16 +183,18 @@ def build_volume_epub(path, volume):
     <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
     <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
     <item id="ch2" href="ch2.xhtml" media-type="application/xhtml+xml"/>
+    {ch3_item}
     <item id="img1" href="img1.png" media-type="image/png" properties="cover-image"/>
     <item id="img2" href="img2.png" media-type="image/png"/>
   </manifest>
   <spine>
     <itemref idref="ch1"/>
     <itemref idref="ch2"/>
+    {ch3_ref}
   </spine>
 </package>
 """
-    nav = """<?xml version="1.0" encoding="utf-8"?>
+    nav = f"""<?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" lang="tr">
 <head><meta charset="utf-8"/><title>İçindekiler</title></head>
@@ -193,6 +203,7 @@ def build_volume_epub(path, volume):
     <ol>
       <li><a href="ch1.xhtml">Bölüm 1</a></li>
       <li><a href="ch2.xhtml">Bölüm 2</a></li>
+      {nav_ch3}
     </ol>
   </nav>
 </body>
@@ -212,6 +223,8 @@ def build_volume_epub(path, volume):
         zf.writestr("nav.xhtml", nav.encode("utf-8"))
         zf.writestr("ch1.xhtml", chapters[0].encode("utf-8"))
         zf.writestr("ch2.xhtml", chapters[1].encode("utf-8"))
+        if count == 3:
+            zf.writestr("ch3.xhtml", chapters[2].encode("utf-8"))
         zf.writestr("img1.png", make_png(64, 64, (103, 80, 164)))
         zf.writestr("img2.png", make_png(64, 64, (194, 94, 0)))
 
@@ -220,7 +233,9 @@ def build_webtoon_cbz(path):
     """Dikey mod için 8 uzun sayfa (600x1800)."""
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for idx in range(1, 9):
-            zf.writestr(f"p{idx}.png", make_png(600, 1800, (20 * idx, 80, 160)))
+            # son sayfa kısadır (600x300): alta kaydırınca görünür sayfa o olmalı (21.1)
+            height = 300 if idx == 8 else 1800
+            zf.writestr(f"p{idx}.png", make_png(600, height, (20 * idx, 80, 160)))
 
 
 def main():
