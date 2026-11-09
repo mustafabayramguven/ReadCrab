@@ -9,6 +9,7 @@ use rusqlite::Connection;
 use crate::error::AppError;
 
 const MIGRATION_0001: &str = include_str!("migrations/0001_init.sql");
+const MIGRATION_0002: &str = include_str!("migrations/0002_iter2.sql");
 
 #[derive(Clone)]
 pub struct Db(Arc<Mutex<Connection>>);
@@ -30,6 +31,13 @@ impl Db {
             let tx = conn.transaction()?;
             tx.execute_batch(MIGRATION_0001)?;
             tx.pragma_update(None, "user_version", 1)?;
+            tx.commit()?;
+        }
+        let user_version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if user_version < 2 {
+            let tx = conn.transaction()?;
+            tx.execute_batch(MIGRATION_0002)?;
+            tx.pragma_update(None, "user_version", 2)?;
             tx.commit()?;
         }
 
