@@ -418,9 +418,14 @@
       updateProgressUi();
     }
 
+    // Yeniden düzen beklerken eski ölçüye göre yapışma yapılmaz (konumu bozar).
     function scheduleRelayout() {
       if (relayoutTimer) clearTimeout(relayoutTimer);
-      relayoutTimer = setTimeout(relayout, RELAYOUT_DELAY);
+      if (snapTimer) clearTimeout(snapTimer);
+      relayoutTimer = setTimeout(function () {
+        relayoutTimer = null;
+        relayout();
+      }, RELAYOUT_DELAY);
     }
 
     // ---- Sayfa modu --------------------------------------------------------------
@@ -459,6 +464,7 @@
     function scheduleSnap() {
       if (snapTimer) clearTimeout(snapTimer);
       snapTimer = setTimeout(function () {
+        if (relayoutTimer) return;
         var doc = frameDoc();
         var win = iframe.contentWindow;
         var se = scrollEl(doc);

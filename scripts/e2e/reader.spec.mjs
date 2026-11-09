@@ -734,7 +734,7 @@ test('sayfa modu', async ({ browser }) => {
   await expect(ind).toHaveText(/^Bölüm 1 · sayfa 1\/\d+ · %\d+$/);
   await settleFrame(page);
   const info0 = await pageInfo(page);
-  expect(info0.n).toBeGreaterThan(3);
+  expect(info0.n).toBeGreaterThan(5);
 
   // klavye: sonraki, önceki
   await page.keyboard.press('ArrowRight');
@@ -1148,8 +1148,9 @@ test('özel kapak', async ({ browser }) => {
 
   await page.goto(`/#/seri/${seriesId}`);
   await expect(page.locator('.list-item')).toHaveCount(2);
-  const baseWidth = await coverImg().evaluate((img) => img.complete && img.naturalWidth);
-  expect(baseWidth).toBeGreaterThan(0);
+  await expect
+    .poll(() => coverImg().evaluate((img) => img.complete && img.naturalWidth))
+    .toBeGreaterThan(0);
 
   await openCoverDialog();
   await page.setInputFiles('#cover-file', {
@@ -1159,7 +1160,7 @@ test('özel kapak', async ({ browser }) => {
   });
   await expect(page.locator('img.cover-preview')).toBeVisible();
   await page.getByRole('button', { name: 'Yükle' }).click();
-  await expect(coverImg()).toHaveAttribute('src', /\?v=\d+/);
+  await expect(coverImg()).toHaveAttribute('src', /\?v=[1-9]\d*/);
   await expect
     .poll(() => coverImg().evaluate((img) => img.complete && img.naturalWidth))
     .toBe(600);
@@ -1169,7 +1170,7 @@ test('özel kapak', async ({ browser }) => {
   await page.goto('/#/');
   const card = page.locator('[data-testid="series-card"]', { hasText: 'Test Serisi' });
   await expect(card).toBeVisible();
-  await expect(card.locator('img')).toHaveAttribute('src', /\?v=\d+/);
+  await expect(card.locator('img')).toHaveAttribute('src', /\?v=[1-9]\d*/);
 
   // özel kapağı kaldır: çıkarılmış kapağa (300 piksel) dönülür, sürüm artar
   await page.goto(`/#/seri/${seriesId}`);
