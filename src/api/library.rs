@@ -383,29 +383,33 @@ async fn get_book(
                      WHERE b.id = ?2 AND b.missing = 0",
                     rusqlite::params![user_id, id],
                     |r| {
-                        Ok((BookDetailRes {
-                            id: r.get(0)?,
-                            series_id: r.get(1)?,
-                            series_name: r.get(2)?,
-                            title: r.get(3)?,
-                            format: r.get(4)?,
-                            page_count: r.get(5)?,
-                            error: r.get(6)?,
-                            status: r.get(7)?,
-                            percent: r.get(8)?,
-                            locator: r.get(9)?,
-                            cover_version: r.get(10)?,
-                            next_book_id: None,
-                            next_book_title: None,
-                            prev_book_id: None,
-                            pace_seconds: None,
-                        }, r.get::<_, i64>(11)?))
+                        Ok((
+                            BookDetailRes {
+                                id: r.get(0)?,
+                                series_id: r.get(1)?,
+                                series_name: r.get(2)?,
+                                title: r.get(3)?,
+                                format: r.get(4)?,
+                                page_count: r.get(5)?,
+                                error: r.get(6)?,
+                                status: r.get(7)?,
+                                percent: r.get(8)?,
+                                locator: r.get(9)?,
+                                cover_version: r.get(10)?,
+                                next_book_id: None,
+                                next_book_title: None,
+                                prev_book_id: None,
+                                pace_seconds: None,
+                            },
+                            r.get::<_, i64>(11)?,
+                        ))
                     },
                 )
                 .optional()?;
             let Some((mut book, sort_index)) = row else {
                 return Err(AppError::NotFound);
             };
+            let series_id = book.series_id;
             let neighbor = |cmp: &str, dir: &str| -> rusqlite::Result<Option<(i64, String)>> {
                 conn.query_row(
                     &format!(
@@ -414,7 +418,7 @@ async fn get_book(
                            AND (sort_index {cmp} ?2 OR (sort_index = ?2 AND id {cmp} ?3))
                          ORDER BY sort_index {dir}, id {dir} LIMIT 1"
                     ),
-                    rusqlite::params![book.series_id, sort_index, id],
+                    rusqlite::params![series_id, sort_index, id],
                     |r| Ok((r.get(0)?, r.get(1)?)),
                 )
                 .optional()

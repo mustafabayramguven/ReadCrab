@@ -477,11 +477,8 @@ pub async fn call(
     if body.is_some() {
         b = b.header(header::CONTENT_TYPE, "application/json");
     }
-    let res = app
-        .clone()
-        .oneshot(b.body(Body::from(body.unwrap_or("").to_string())).unwrap())
-        .await
-        .unwrap();
+    let body = Body::from(body.unwrap_or("").to_string());
+    let res = app.clone().oneshot(b.body(body).unwrap()).await.unwrap();
     let status = res.status();
     let bytes = res.into_body().collect().await.unwrap().to_bytes();
     (status, serde_json::from_slice(&bytes).unwrap_or_default())
@@ -508,9 +505,8 @@ pub async fn user_id(dirs: &TempDirs, username: &str) -> i64 {
     let u = username.to_string();
     dirs.db
         .run(move |c| {
-            Ok(c.query_row("SELECT id FROM users WHERE username = ?1", [u], |r| {
-                r.get(0)
-            })?)
+            let sql = "SELECT id FROM users WHERE username = ?1";
+            Ok(c.query_row(sql, [u], |r| r.get(0))?)
         })
         .await
         .unwrap()
@@ -527,11 +523,11 @@ pub async fn seed_books(dirs: &TempDirs, series: &str, n: usize) -> Vec<i64> {
             )?;
             let sid = c.last_insert_rowid();
             let mut ids = Vec::new();
-            for i in 1..=n {
+            for i in 1..=n as i64 {
                 c.execute(
                     "INSERT INTO books(series_id,rel_path,title,format,size,mtime,content_id,sort_index,added_at)
                      VALUES(?1,?2,?3,'cbz',1,1,?2,?4,1)",
-                    rusqlite::params![sid, format!("{series}/{i}.cbz"), format!("Cilt {i}"), i as i64],
+                    rusqlite::params![sid, format!("{series}/{i}.cbz"), format!("Cilt {i}"), i],
                 )?;
                 ids.push(c.last_insert_rowid());
             }

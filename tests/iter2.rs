@@ -62,7 +62,10 @@ async fn book_detail_next_prev_and_pace() {
     let get = |id: i64| {
         let app = app.clone();
         let admin = admin.clone();
-        async move { call(&app, "GET", &format!("/api/books/{id}"), &admin, None).await.1 }
+        async move {
+            let uri = format!("/api/books/{id}");
+            call(&app, "GET", &uri, &admin, None).await.1
+        }
     };
     let first = get(ids[0]).await;
     assert_eq!(first["next_book_id"], ids[1]);
@@ -136,7 +139,8 @@ async fn heatmap_isolated_per_user() {
     assert!(v["days"].as_array().unwrap().is_empty());
 
     for q in ["?year=1999", "?year=2101", "?year=abc", ""] {
-        let (st, _) = call(&app, "GET", &format!("/api/stats/heatmap{q}"), &admin, None).await;
+        let uri = format!("/api/stats/heatmap{q}");
+        let (st, _) = call(&app, "GET", &uri, &admin, None).await;
         assert_eq!(st, StatusCode::BAD_REQUEST, "{q}");
     }
 }
