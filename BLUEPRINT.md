@@ -1711,3 +1711,37 @@ Ekran görüntüleri (360 ve 1280, açık/koyu; mevcut adlandırma `ad-{genişli
 - Heatmap 53 sütun, gereken yıllarda 54 sütun. "En çok okuduğun gün" tek tarih; "Günlük ortalama" okunan günlere bölünür. Kalan süre yalnız o kitabın oturumlarından; yetersiz veride gizli. `next_book_title` kabul. Tireleme yalnız "İki yana"da. Wake Lock düğmesiz, otomatik. Atkinson statik 400/700 kabul.
 - Bu turda commit etiketleri `Claude Opus 5.5` diye sabit DEĞİLDİR: her işçi kendi oturumunun sistem hatırlatıcısındaki attribution satırlarını kullanır. Önceki bölümlerdeki sabit etiket kuralı iptal.
 - Mevcut kullanıcı verisini etkileyen hiçbir şey (`user_version`, locator, `krs.*`) bölüm 20 dışında değişmez.
+
+---
+
+## 21. İterasyon 2 düzeltme turu (önceki bölümlerle çelişirse bu bölüm kazanır)
+
+Kaynak: şeytanın avukatı raporu + CEO'nun ekran görüntüsü incelemesi. Her madde tamamlanır. Testler silinmez, zayıflatılmaz.
+
+### 21.1 Okuma ilerlemesi
+1. **Kısa son bölüm (`reader-text.js`, `calc.js`).** Bölümde yalnız bir sayfa/ekran varsa (`pageTotal<=1` veya `maxScroll<=1`) bölüm içi oran yüklemeden sonra 1 sayılır, ilerleme kaydedilir; son bölümse kitap %100 olur, `finished` tetiklenir, sonraki cilt kartı görünür. Sayfa modunda son bölümün son sayfası da `p=1`. Yeni kitaplarda okumadan geçilen tek ekranlı ara bölümler sıradaki bölüme geçene kadar `finished` üretmez (yalnız son bölüm için `%100`). e2e fikstürü: `Üçüncü Uzun Seri/Cilt 1.epub`'a tek paragraflık son bölüm eklenir; test bu bölüme girince `status='finished'`, kart görünür.
+2. **Kısa son webtoon sayfası (`reader-comic.js`).** Kaydırma alta ulaştıysa (`scrollTop+clientHeight >= scrollHeight-2`) görünür sayfa son sayfadır. e2e: `dikey.cbz` son sayfası 600x300, sona kaydırınca `8 / 8` ve finished.
+3. **Bayat belge olayı (`reader-text.js`).** `loadChapter` başında eski belgenin scroll/snap dinleyicileri kaldırılır, nesil sayacı denetlenir; yeni çerçeve hazır olana kadar `persist` ve `addPage` çalışmaz. `restoring` kilidi çift `requestAnimationFrame` sonrası açılır. Test: e2e'de kaydırma sırasında `]`, kaydedilen locator `{ch:yeni,p:0}`.
+4. **Yer imi eşleşmesi.** Sayfa modunda aynı `pageFromRatio` sayfası; kaydırma modunda `|Δp| < 0.005`. Düğme istek sürerken `disabled`; çift POST yok.
+
+### 21.2 Arka uç
+5. **Arama (`textsearch.rs`, `reader.rs`).** Varlık ayrıştırma en çok 10 karakter ileri bakar. Bölüm içinde de `Instant` denetimi yapılır (en az her 64 KiB'da). Semafor izni `spawn_blocking` closure'ına taşınır (istemci koparsa tarama bitene kadar izin tutulur). Sorgudaki ardışık boşluk teke iner. İstemci karakter sayısı `[...q].length`, 2-64. Test: 8 MiB `&` gövdeli bölümde arama 10 sn sınırı içinde `truncated`/tamam döner; `strip_tags` birim testi.
+6. **Kapak yarışları (`cover.rs`, `scan.rs`).**
+   - Tüm kapak dosyası yazımları tek noktadan: benzersiz `{id}.{rastgele}.tmp` (`new_session_token` değil, `rand` u64 hex), `rename`; hata halinde `.tmp` silinir. Başlangıçta `covers/*.tmp` temizlenir.
+   - `extract_cover` önce geçici dosyaya üretir; yayımlama bir `tokio::sync::Mutex` (`AppState.cover_lock`) altında: `custom_cover` yeniden okunur, 1 ise tarama sonucu atılır. PUT/DELETE aynı kilidi tutar.
+   - Tarama yeniden kapak çıkardığında `cover_version` artar (`?v=` bayatlamaz).
+   - Kapak kodlama için `Semaphore(1)`, eşzamanlı istek sıraya girer.
+7. **EXIF yönü (`encode_custom_cover`).** `ImageDecoder::orientation()` + `DynamicImage::apply_orientation` ile düzeltilir (`image 0.25.8`; API yoksa docs.rs'ten doğrula, sürüm değiştirme; yapılamıyorsa `BLOKE:`). Test: EXIF yön etiketli küçük JPEG baytları testte elle üretilir, çıktı boyutu döndürülmüş olur.
+
+### 21.3 Çizgi roman ve yardımcılar
+8. **Webtoon hata durumu (`reader-comic.js`).** Yükleme hatasında sayfa çökmez: 70vh yer tutucu, `.empty.error` ve "Yeniden dene". Geri yükleme `setTimeout`'u cleanup'ta temizlenir.
+9. **`keepAwake`:** eşzamanlı `acquire` engellenir, yeni kilit eskisini sızdırmaz.
+10. **Tam ekran:** okuyucu cleanup'ı tam ekrandan çıkmaz; okuyucu dışı rotaya geçişte çıkar. Sonraki cilde geçişte tam ekran korunur.
+11. **Heatmap kaydırma:** içinde bulunulan yılda dar ekranda bugünün sütunu görünür ortalanır; geçmiş yılda sona kaydırılır.
+
+### 21.4 Görsel (ekran görüntüsü bulguları)
+12. **Ayarlar canlı önizleme:** `.reader-settings::backdrop` tamamen saydam, sheet'in ardında metin karartılmaz, kitap değişimi görülür. Kapatma: dışarı tıklama, Esc, X.
+13. **≥840 px ayarlar paneli:** Sağda tam yükseklikte yan panel: genişlik 360 px, `height:100dvh`, sağ üst/alt köşe yok, `surface-container-low`, sağdan kayar (`medium3`, `emphasized-decelerate`). Üst/alt okuyucu çubuklarının üstünde. Metin alanı panelin altında kalsa da sayfa düzeni değişmez. `max-height` sınırı yok; tüm kontroller kaydırma az olacak biçimde sıkı sıralı.
+14. **<840 px ayarlar:** Bottom sheet `max-height: min(62vh, 520px)`. Yazı tipi listesi tek satır yatay kaydırılır (`overflow-x:auto`, `scroll-snap-type:x proximity`, kart 132 px, gizli kaydırma çubuğu, klavyeyle gezilebilir); seçili yazı tipi görünür alana kaydırılır. Aralık kaydırıcıları etiket ve değer tek satırda, kompakt.
+15. **Heatmap boyutu (`stats.js`):** Hücre boyutu kap genişliğine göre: `cell = clamp(12, floor((w - 28 - (cols-1)*gap)/cols), 20)`, `gap=3`; `ResizeObserver` (150 ms debounce). 1280 px'te kartın genişliğini doldurur; 360 px'te 12 px hücre ve yatay kaydırma.
+16. e2e: 1280 px'te `.reader-settings` genişliği 360 ve sağa yaslı; backdrop rengi saydam; 360 px'te `.font-list` `scrollWidth > clientWidth` ve yükseklik bir satır; 1280 px'te `.heatmap-scroll svg` genişliği kartın en az %85'i.
