@@ -620,7 +620,8 @@
       updateUi();
       setTimeout(function () {
         restoring = false;
-        record(false);
+        // geri yükleme sırasında kullanıcı kaydırdıysa yeni konum da kaydedilir
+        record(curPage !== start);
       }, 300);
       if (nextVolume) nextVolume.setVisible(false);
     }
