@@ -407,6 +407,8 @@ test('okuyucu uçtan uca', async ({ page }) => {
 });
 
 test('görünüm ve erişilebilirlik', async ({ browser }) => {
+  // 2 boyut x 2 şema x ~24 ekran; her ekranda ağ boşta beklemesi ve axe
+  test.setTimeout(240000);
   fs.mkdirSync('screenshots', { recursive: true });
 
   const viewports = [
@@ -637,7 +639,7 @@ test('görünüm ve erişilebilirlik', async ({ browser }) => {
         if (scr.openAction) {
           await scr.openAction(page);
           // açılış animasyonu bitmeden ekran görüntüsü alınmaz
-          await page.waitForTimeout(600);
+          await page.waitForTimeout(450);
         }
 
         if (scr.name === 'okuyucu-webtoon') {
