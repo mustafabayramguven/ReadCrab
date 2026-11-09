@@ -15,6 +15,7 @@ use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    api::library::fold_tr,
     app::{AppState, MobiCache},
     auth::AuthUser,
     error::AppError,
@@ -23,6 +24,7 @@ use crate::{
         epub::{epub_asset, epub_chapter_html, epub_open},
         mobi::{mobi_open, MobiBook},
         sanitize::{frame_document, sanitize_chapter, SrcMode, FRAME_CSP},
+        textsearch::{Collector, SearchHit},
         Format, FormatError, MAX_ENTRY_BYTES,
     },
     safepath::resolve_book_path,
@@ -51,6 +53,83 @@ pub fn router() -> Router<AppState> {
         .route("/api/books/{id}/toc", get(get_toc))
         .route("/api/books/{id}/chapters/{n}", get(get_chapter))
         .route("/api/books/{id}/asset", get(get_asset))
+        .route("/api/books/{id}/search", get(search_book))
+}
+
+pub static SEARCH_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+
+#[derive(Deserialize)]
+struct SearchQuery {
+    q: Option<String>,
+}
+
+#[derive(Serialize)]
+struct SearchRes {
+    results: Vec<SearchHit>,
+    truncated: bool,
+}
+
+async fn search_book(
+    _user: AuthUser,
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<i64>,
+    Query(query): Query<SearchQuery>,
+) -> Result<Json<SearchRes>, AppError> {
+    let meta = load_book_meta(&state, id).await?;
+    if meta.format.is_comic() {
+        return Err(AppError::BadRequest(
+            "Bu uç nokta yalnız metin biçimleri içindir.",
+        ));
+    }
+    let q = fold_tr(query.q.unwrap_or_default().trim());
+    if !(2..=64).contains(&q.chars().count()) {
+        return Err(AppError::BadRequest(
+            "Arama ifadesi 2-64 karakter olmalıdır.",
+        ));
+    }
+    let _permit = SEARCH_SLOTS
+        .try_acquire()
+        .map_err(|_| AppError::TooManyAttempts { retry_after: 2 })?;
+
+    let full_path = meta.full_path;
+    let format = meta.format;
+    let mobi_cache = state.mobi_cache.clone();
+    let res = tokio::task::spawn_blocking(move || -> Result<SearchRes, FormatError> {
+        let mut found = Collector::new(&q);
+        match format {
+            Format::Epub => {
+                let info = epub_open(&full_path)?;
+                for n in 0..info.spine.len() {
+                    match epub_chapter_html(&full_path, &info, n) {
+                        Ok(html) => {
+                            if !found.add_chapter(n, &html) {
+                                break;
+                            }
+                        }
+                        Err(FormatError::TooLarge) => found.truncated = true,
+                        Err(e) => return Err(e),
+                    }
+                }
+            }
+            Format::Mobi => {
+                let book = open_mobi_cached(&mobi_cache, &full_path)?;
+                for (n, html) in book.chapters.iter().enumerate() {
+                    if !found.add_chapter(n, html) {
+                        break;
+                    }
+                }
+            }
+            _ => return Err(FormatError::Corrupt),
+        }
+        Ok(SearchRes {
+            results: found.results,
+            truncated: found.truncated,
+        })
+    })
+    .await
+    .map_err(|_| AppError::Internal)??;
+
+    Ok(Json(res))
 }
 
 struct BookMeta {

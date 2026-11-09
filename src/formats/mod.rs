@@ -8,6 +8,7 @@ pub mod epub;
 pub mod mobi;
 pub mod natural;
 pub mod sanitize;
+pub mod textsearch;
 
 pub const MAX_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
 pub const MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;

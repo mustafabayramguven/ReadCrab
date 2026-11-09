@@ -1,7 +1,11 @@
 mod common;
 
 use axum::http::StatusCode;
-use common::{call, create_user_cookie, login_as_admin, seed_books, test_app, user_id};
+use common::{
+    call, create_user_cookie, login_as_admin, make_cbz, make_epub, make_epub_html, make_mobi, png,
+    seed_books, test_app, user_id, EpubOpts,
+};
+use readcrab::{api::reader::SEARCH_SLOTS, scan::scan_once};
 
 async fn exec(dirs: &common::TempDirs, sql: String) {
     dirs.db
@@ -180,4 +184,101 @@ async fn history_date_filter() {
     assert_eq!(v["total"], 0);
     let (_, v) = call(&app, "GET", "/api/history?date=2026-03-03", &other, None).await;
     assert_eq!(v["total"], 1);
+}
+
+// Arama uçları paylaşılan 2 izinli semafor kullanır; 429 testi diğerlerini bekletir.
+static SEARCH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+async fn search_setup(dirs: &common::TempDirs, rel: &str) -> i64 {
+    assert!(scan_once(&dirs.state).await);
+    let rel = rel.to_string();
+    dirs.db
+        .run(move |c| {
+            let sql = "SELECT id FROM books WHERE rel_path = ?1";
+            Ok(c.query_row(sql, [rel], |r| r.get(0))?)
+        })
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn search_epub_turkish_fold() {
+    let _g = SEARCH_LOCK.lock().await;
+    let (app, dirs) = test_app().await;
+    let admin = login_as_admin(&app).await;
+    let books = dirs.books_dir.path();
+    make_epub(books, "a.epub", EpubOpts::default());
+    let html = "<html><head><title>Gizlibaşlık</title></head><body><p>şeker</p>\
+        <p>IŞIK ve İŞİK</p></body></html>";
+    make_epub_html(books, "b.epub", html);
+    let long = format!("<html><body><p>{}</p></body></html>", "ab ".repeat(150));
+    make_epub_html(books, "c.epub", &long);
+    make_cbz(books, "d.cbz", &[("1.png", png(4, 4, [1, 2, 3]))]);
+    make_mobi(books, "e.mobi");
+    let a = search_setup(&dirs, "a.epub").await;
+    let b = search_setup(&dirs, "b.epub").await;
+    let c = search_setup(&dirs, "c.epub").await;
+    let d = search_setup(&dirs, "d.cbz").await;
+    let e = search_setup(&dirs, "e.mobi").await;
+    let get = |id: i64, q: &str| {
+        let (app, admin) = (app.clone(), admin.clone());
+        let uri = format!("/api/books/{id}/search?q={q}");
+        async move { call(&app, "GET", &uri, &admin, None).await }
+    };
+
+    // a.epub: "İkinci" iki kez (başlık ve paragraf), yalnız 2. bölümde
+    let (st, v) = get(a, "IKINCI").await;
+    assert_eq!(st, StatusCode::OK);
+    let r = v["results"].as_array().unwrap();
+    assert_eq!(r.len(), 2);
+    assert_eq!(r[0]["ch"], 1);
+    assert_eq!(r[0]["p"], 0.0);
+    assert_eq!(r[0]["hit"], "İkinci");
+    assert_eq!(r[0]["before"], "");
+    assert_eq!(r[1]["before"], "İkinci Bölüm");
+    assert_eq!(v["truncated"], false);
+
+    // b.epub: <p> içi bulunur, <title> bulunmaz; ışık/IŞIK/İŞİK eşdeğer
+    let (_, v) = get(b, "%C5%9Feker").await;
+    assert_eq!(v["results"].as_array().unwrap().len(), 1);
+    let (_, v) = get(b, "gizlib").await;
+    assert!(v["results"].as_array().unwrap().is_empty());
+    let (_, v) = get(b, "%C4%B1%C5%9F%C4%B1k").await;
+    assert_eq!(v["results"].as_array().unwrap().len(), 2);
+    assert_eq!(v["results"][1]["hit"], "İŞİK");
+
+    // c.epub: 100 sınırı
+    let (_, v) = get(c, "ab").await;
+    assert_eq!(v["results"].as_array().unwrap().len(), 100);
+    assert_eq!(v["truncated"], true);
+
+    // MOBI bölümleri
+    let (st, v) = get(e, "bolum").await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(v["results"].as_array().unwrap().len(), 2);
+
+    // kısa sorgu, görsel kitap, boş sorgu: 400
+    for (id, q) in [(a, "i"), (a, ""), (a, "%20%20"), (d, "ab")] {
+        let (st, _) = get(id, q).await;
+        assert_eq!(st, StatusCode::BAD_REQUEST, "{id}/{q}");
+    }
+    let (st, _) = get(a, &"x".repeat(65)).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn search_concurrency_429() {
+    let _g = SEARCH_LOCK.lock().await;
+    let (app, dirs) = test_app().await;
+    let admin = login_as_admin(&app).await;
+    make_epub(dirs.books_dir.path(), "a.epub", EpubOpts::default());
+    let a = search_setup(&dirs, "a.epub").await;
+    let uri = format!("/api/books/{a}/search?q=bolum");
+    let _p1 = SEARCH_SLOTS.try_acquire().unwrap();
+    let _p2 = SEARCH_SLOTS.try_acquire().unwrap();
+    let (st, _) = call(&app, "GET", &uri, &admin, None).await;
+    assert_eq!(st, StatusCode::TOO_MANY_REQUESTS);
+    drop(_p2);
+    let (st, _) = call(&app, "GET", &uri, &admin, None).await;
+    assert_eq!(st, StatusCode::OK);
 }

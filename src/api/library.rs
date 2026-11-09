@@ -67,14 +67,15 @@ struct SeriesListRes {
     items: Vec<SeriesListItem>,
 }
 
+pub fn fold_char(c: char) -> char {
+    match c {
+        'İ' | 'I' | 'ı' => 'i',
+        _ => c.to_lowercase().next().unwrap_or(c),
+    }
+}
+
 pub fn fold_tr(s: &str) -> String {
-    s.chars()
-        .map(|c| match c {
-            'İ' | 'I' | 'ı' => 'i',
-            _ => c,
-        })
-        .collect::<String>()
-        .to_lowercase()
+    s.chars().map(fold_char).collect()
 }
 
 struct SeriesRow {

@@ -536,3 +536,20 @@ pub async fn seed_books(dirs: &TempDirs, series: &str, n: usize) -> Vec<i64> {
         .await
         .unwrap()
 }
+
+/// Tek bölümlü en küçük EPUB; bölüm HTML'i verilen metindir.
+pub fn make_epub_html(dir: &Path, name: &str, chapter: &str) -> PathBuf {
+    let container = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#;
+    let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Arama</dc:title></metadata><manifest><item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="ch1"/></spine></package>"#;
+    make_cbz(
+        dir,
+        name,
+        &[
+            ("META-INF/container.xml", container.as_bytes().to_vec()),
+            ("OEBPS/content.opf", opf.as_bytes().to_vec()),
+            ("OEBPS/ch1.xhtml", chapter.as_bytes().to_vec()),
+        ],
+    )
+}
