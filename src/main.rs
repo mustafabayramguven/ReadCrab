@@ -66,6 +66,8 @@ async fn main() {
         std::process::exit(2);
     }
 
+    readcrab::formats::cover::remove_stale_tmp(&covers_dir);
+
     let db_path = cfg.data_dir.join("readcrab.db");
     let db = Db::open(&db_path).unwrap_or_else(|e| {
         eprintln!(
@@ -82,6 +84,7 @@ async fn main() {
         scan: Arc::new(ScanStatus::new()),
         limiter: Arc::new(LoginLimiter::new()),
         mobi_cache: Arc::new(Mutex::new(None)),
+        cover_lock: Arc::new(tokio::sync::Mutex::new(())),
     };
 
     let cleanup_db = state.db.clone();

@@ -401,6 +401,7 @@ pub async fn test_app_with_secure(cookie_secure: bool) -> (Router, TempDirs) {
         scan: Arc::new(ScanStatus::new()),
         limiter: Arc::new(LoginLimiter::new()),
         mobi_cache: Arc::new(Mutex::new(None)),
+        cover_lock: Arc::new(tokio::sync::Mutex::new(())),
     };
     let app = build_app(state.clone());
     (

@@ -81,13 +81,20 @@ async fn search_book(
             "Bu uç nokta yalnız metin biçimleri içindir.",
         ));
     }
-    let q = fold_tr(query.q.unwrap_or_default().trim());
+    let collapsed = query
+        .q
+        .unwrap_or_default()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let q = fold_tr(&collapsed);
     if !(2..=64).contains(&q.chars().count()) {
         return Err(AppError::BadRequest(
             "Arama ifadesi 2-64 karakter olmalıdır.",
         ));
     }
-    let _permit = SEARCH_SLOTS
+    // izin tarama bitene kadar tutulur (istemci kopsa bile)
+    let permit = SEARCH_SLOTS
         .try_acquire()
         .map_err(|_| AppError::TooManyAttempts { retry_after: 2 })?;
 
@@ -95,6 +102,7 @@ async fn search_book(
     let format = meta.format;
     let mobi_cache = state.mobi_cache.clone();
     let res = tokio::task::spawn_blocking(move || -> Result<SearchRes, FormatError> {
+        let _permit = permit;
         let mut found = Collector::new(&q);
         match format {
             Format::Epub => {

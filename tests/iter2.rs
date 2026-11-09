@@ -282,3 +282,32 @@ async fn search_concurrency_429() {
     let (st, _) = call(&app, "GET", &uri, &admin, None).await;
     assert_eq!(st, StatusCode::OK);
 }
+
+#[tokio::test]
+async fn search_huge_ampersand_chapter_stays_within_limit() {
+    let _g = SEARCH_LOCK.lock().await;
+    let (app, dirs) = test_app().await;
+    let admin = login_as_admin(&app).await;
+    let html = format!("<html><body><p>{}</p></body></html>", "&".repeat(7 << 20));
+    make_epub_html(dirs.books_dir.path(), "buyuk.epub", &html);
+    let id = search_setup(&dirs, "buyuk.epub").await;
+    let uri = format!("/api/books/{id}/search?q=bolum");
+    let start = std::time::Instant::now();
+    let (st, v) = call(&app, "GET", &uri, &admin, None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert!(start.elapsed() < std::time::Duration::from_secs(15));
+    assert!(v["results"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn search_collapses_whitespace_in_query() {
+    let _g = SEARCH_LOCK.lock().await;
+    let (app, dirs) = test_app().await;
+    let admin = login_as_admin(&app).await;
+    make_epub(dirs.books_dir.path(), "a.epub", EpubOpts::default());
+    let a = search_setup(&dirs, "a.epub").await;
+    let uri = format!("/api/books/{a}/search?q=ikinci%20%20%20b%C3%B6l%C3%BCm");
+    let (st, v) = call(&app, "GET", &uri, &admin, None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert!(!v["results"].as_array().unwrap().is_empty());
+}

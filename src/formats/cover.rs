@@ -1,6 +1,13 @@
-use std::{io::Cursor, path::Path};
+use std::{
+    io::Cursor,
+    path::{Path, PathBuf},
+};
 
-use image::{codecs::jpeg::JpegEncoder, ImageFormat, ImageReader, Limits, Rgb, RgbImage};
+use image::{
+    codecs::jpeg::JpegEncoder, metadata::Orientation, DynamicImage, ImageDecoder, ImageFormat,
+    ImageReader, Limits, Rgb, RgbImage,
+};
+use tokio::sync::Semaphore;
 
 use crate::{
     formats::{
@@ -12,6 +19,44 @@ use crate::{
     safepath::resolve_book_path,
 };
 
+/// Özel kapak kodlama aynı anda tek istek çalışır, diğerleri sıraya girer.
+pub static COVER_ENCODE: Semaphore = Semaphore::const_new(1);
+
+/// `{id}.{rastgele}.tmp`: eşzamanlı yazımlar birbirinin dosyasını ezmez.
+pub fn unique_tmp(dir: &Path, id: i64) -> PathBuf {
+    dir.join(format!("{id}.{:016x}.tmp", rand::random::<u64>()))
+}
+
+/// Geçici dosyaya yazar; hata olursa dosyayı siler.
+pub fn write_tmp(dir: &Path, id: i64, bytes: &[u8]) -> std::io::Result<PathBuf> {
+    std::fs::create_dir_all(dir)?;
+    let tmp = unique_tmp(dir, id);
+    if let Err(e) = std::fs::write(&tmp, bytes) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    Ok(tmp)
+}
+
+/// Geçici dosyayı yayımlar (rename); hata olursa geçici dosyayı siler.
+pub fn publish_tmp(tmp: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::rename(tmp, dst).inspect_err(|_| {
+        let _ = std::fs::remove_file(tmp);
+    })
+}
+
+/// Başlangıçta yarım kalmış `*.tmp` dosyalarını temizler.
+pub fn remove_stale_tmp(dir: &Path) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in rd.flatten() {
+        if e.path().extension().is_some_and(|x| x == "tmp") {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct BookRow {
     pub id: i64,
@@ -19,22 +64,21 @@ pub struct BookRow {
     pub format: Format,
 }
 
-pub async fn extract_cover(root: &Path, book: &BookRow, covers_dir: &Path) -> bool {
+/// Kapağı üretip geçici dosyaya yazar; yayımlamak çağıranın işidir (`cover_lock` altında).
+pub async fn render_cover(root: &Path, book: &BookRow, covers_dir: &Path) -> Option<PathBuf> {
     let Ok(full_path) = resolve_book_path(root, &book.rel_path) else {
-        return false;
+        return None;
     };
 
     let raw_bytes = match book.format {
         Format::Cbz | Format::Zip | Format::Rar | Format::Cbr => {
             let Ok(pages) = comic_pages(&full_path, book.format).await else {
-                return false;
+                return None;
             };
-            let Some(first) = pages.first() else {
-                return false;
-            };
+            let first = pages.first()?;
             let Ok(bytes) = comic_read(&full_path, book.format, first, MAX_ENTRY_BYTES).await
             else {
-                return false;
+                return None;
             };
             bytes
         }
@@ -48,7 +92,7 @@ pub async fn extract_cover(root: &Path, book: &BookRow, covers_dir: &Path) -> bo
             })
             .await
             else {
-                return false;
+                return None;
             };
             bytes
         }
@@ -60,16 +104,30 @@ pub async fn extract_cover(root: &Path, book: &BookRow, covers_dir: &Path) -> bo
             })
             .await
             else {
-                return false;
+                return None;
             };
             bytes
         }
     };
 
-    let out_path = covers_dir.join(format!("{}.jpg", book.id));
-    tokio::task::spawn_blocking(move || resize_and_save_jpeg(&raw_bytes, &out_path))
+    let out_path = unique_tmp(covers_dir, book.id);
+    let tmp = out_path.clone();
+    let ok = tokio::task::spawn_blocking(move || resize_and_save_jpeg(&raw_bytes, &out_path))
         .await
-        .unwrap_or(false)
+        .unwrap_or(false);
+    if !ok {
+        let _ = std::fs::remove_file(&tmp);
+        return None;
+    }
+    Some(tmp)
+}
+
+/// Üret ve doğrudan yayımla (kilitsiz; yarış olmayan bağlamlar ve testler için).
+pub async fn extract_cover(root: &Path, book: &BookRow, covers_dir: &Path) -> bool {
+    let Some(tmp) = render_cover(root, book, covers_dir).await else {
+        return false;
+    };
+    publish_tmp(&tmp, &covers_dir.join(format!("{}.jpg", book.id))).is_ok()
 }
 
 fn resize_and_save_jpeg(raw_bytes: &[u8], out_path: &Path) -> bool {
@@ -140,7 +198,12 @@ pub fn encode_custom_cover(raw: &[u8]) -> Result<Vec<u8>, ()> {
     if w == 0 || h == 0 || u64::from(w) * u64::from(h) > MAX_PIXELS {
         return Err(());
     }
-    let img = reader.decode().map_err(|_| ())?;
+    let mut decoder = reader.into_decoder().map_err(|_| ())?;
+    // EXIF yönü: etiket okunamazsa dönüştürme yapılmaz
+    let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
+    let mut img = DynamicImage::from_decoder(decoder).map_err(|_| ())?;
+    img.apply_orientation(orientation);
+    let (w, h) = (img.width(), img.height());
 
     let rgba = img.to_rgba8();
     let mut rgb = RgbImage::new(w, h);
@@ -178,6 +241,38 @@ mod tests {
         img.write_to(&mut Cursor::new(&mut buf), ImageFormat::Png)
             .unwrap();
         buf
+    }
+
+    // EXIF yön etiketi (Orientation=6) olan JPEG: APP1 bölümü SOI'den hemen sonra eklenir.
+    fn jpeg_with_orientation(w: u32, h: u32, orientation: u8) -> Vec<u8> {
+        let img = RgbImage::from_fn(w, h, |_, _| Rgb([200, 30, 30]));
+        let mut plain = Vec::new();
+        JpegEncoder::new_with_quality(&mut plain, 90)
+            .encode_image(&img)
+            .unwrap();
+        let mut tiff = vec![0x49, 0x49, 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00, 0x01, 0x00];
+        tiff.extend_from_slice(&[0x12, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00]);
+        tiff.extend_from_slice(&[orientation, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        let mut seg = b"Exif\0\0".to_vec();
+        seg.extend_from_slice(&tiff);
+        let len = (seg.len() + 2) as u16;
+        let mut out = vec![0xFF, 0xD8, 0xFF, 0xE1];
+        out.extend_from_slice(&len.to_be_bytes());
+        out.extend_from_slice(&seg);
+        out.extend_from_slice(&plain[2..]);
+        out
+    }
+
+    #[test]
+    fn custom_cover_applies_exif_orientation() {
+        let raw = jpeg_with_orientation(40, 20, 6);
+        let out = encode_custom_cover(&raw).unwrap();
+        let img = image::load_from_memory(&out).unwrap();
+        assert_eq!((img.width(), img.height()), (20, 40));
+        // etiketsiz kaynak döndürülmez
+        let plain = encode_custom_cover(&jpeg_with_orientation(40, 20, 1)).unwrap();
+        let img = image::load_from_memory(&plain).unwrap();
+        assert_eq!((img.width(), img.height()), (40, 20));
     }
 
     #[tokio::test]

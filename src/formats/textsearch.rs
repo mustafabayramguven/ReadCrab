@@ -8,6 +8,7 @@ const MAX_HITS: usize = 100;
 const CONTEXT: usize = 40;
 const MAX_SCANNED_BYTES: usize = 64 * 1024 * 1024;
 const MAX_DURATION: Duration = Duration::from_secs(10);
+const CHECK_EVERY: usize = 64 * 1024;
 const BLOCK_TAGS: [&str; 15] = [
     "p",
     "div",
@@ -35,27 +36,56 @@ pub struct SearchHit {
     pub after: String,
 }
 
-fn push_decoded(out: &mut String, text: &str) {
+/// Büyük girdide süre denetimi: en az her 64 KiB işlemde bir saate bakar.
+struct Clock {
+    deadline: Option<Instant>,
+    since: usize,
+}
+
+impl Clock {
+    /// `n` bayt işlendi; süre dolduysa true döner.
+    fn tick(&mut self, n: usize) -> bool {
+        self.since += n;
+        if self.since < CHECK_EVERY {
+            return false;
+        }
+        self.since = 0;
+        self.deadline.is_some_and(|d| Instant::now() > d)
+    }
+}
+
+fn push_decoded(out: &mut String, text: &str, clock: &mut Clock) -> bool {
     let mut rest = text;
     while let Some(i) = rest.find('&') {
         out.push_str(&rest[..i]);
         rest = &rest[i..];
-        let decoded = rest[1..]
+        // varlık adı için en çok 10 karakter ileri bakılır
+        let tail = &rest[1..];
+        let end = tail
+            .char_indices()
+            .nth(10)
+            .map_or(tail.len(), |(k, _)| k);
+        let window = &tail[..end];
+        let decoded = window
             .find(';')
-            .filter(|&j| j <= 8)
-            .and_then(|j| decode_entity(&rest[1..=j]).map(|c| (c, j + 2)));
-        match decoded {
+            .and_then(|j| decode_entity(&window[..j]).map(|c| (c, j + 2)));
+        let used = match decoded {
             Some((c, used)) => {
                 out.push(c);
-                rest = &rest[used..];
+                used
             }
             None => {
                 out.push('&');
-                rest = &rest[1..];
+                1
             }
+        };
+        rest = &rest[used..];
+        if clock.tick(i + used) {
+            return false;
         }
     }
     out.push_str(rest);
+    !clock.tick(rest.len())
 }
 
 fn decode_entity(name: &str) -> Option<char> {
@@ -87,10 +117,18 @@ fn find_ci(hay: &str, needle: &str) -> Option<usize> {
 
 // shortcut: öznitelik değeri içindeki '>' etiketi erken bitirir, gerekirse tırnak izlenir
 pub fn strip_tags(html: &str) -> String {
+    strip_tags_until(html, None).unwrap_or_default()
+}
+
+/// `deadline` dolarsa None döner (kısmi metin kullanılmaz).
+pub fn strip_tags_until(html: &str, deadline: Option<Instant>) -> Option<String> {
+    let mut clock = Clock { deadline, since: 0 };
     let mut out = String::with_capacity(html.len() / 2);
     let mut rest = html;
     while let Some(i) = rest.find('<') {
-        push_decoded(&mut out, &rest[..i]);
+        if !push_decoded(&mut out, &rest[..i], &mut clock) {
+            return None;
+        }
         rest = &rest[i + 1..];
         if let Some(r) = rest.strip_prefix("!--") {
             rest = r.find("-->").map_or("", |j| &r[j + 3..]);
@@ -114,9 +152,14 @@ pub fn strip_tags(html: &str) -> String {
         if BLOCK_TAGS.contains(&name.as_str()) {
             out.push(' ');
         }
+        if clock.tick(end + 1) {
+            return None;
+        }
     }
-    push_decoded(&mut out, rest);
-    out.split_whitespace().collect::<Vec<_>>().join(" ")
+    if !push_decoded(&mut out, rest, &mut clock) {
+        return None;
+    }
+    Some(out.split_whitespace().collect::<Vec<_>>().join(" "))
 }
 
 fn slice(text: &[char], a: usize, b: usize) -> String {
@@ -150,11 +193,21 @@ impl Collector {
             self.truncated = true;
             return false;
         }
-        let text: Vec<char> = strip_tags(html).chars().collect();
+        let Some(stripped) = strip_tags_until(html, Some(self.start + MAX_DURATION)) else {
+            self.truncated = true;
+            return false;
+        };
+        let text: Vec<char> = stripped.chars().collect();
         let folded: Vec<char> = text.iter().map(|&c| fold_char(c)).collect();
         let q = &self.query;
         let mut i = 0;
+        let mut steps = 0usize;
         while i + q.len() <= folded.len() {
+            steps += 1;
+            if steps % CHECK_EVERY == 0 && self.start.elapsed() > MAX_DURATION {
+                self.truncated = true;
+                return false;
+            }
             if folded[i..i + q.len()] != q[..] {
                 i += 1;
                 continue;
@@ -206,6 +259,31 @@ mod tests {
         let mut c = Collector::new("aa");
         c.add_chapter(0, "<p>aaaaa</p>");
         assert_eq!(c.results.len(), 2);
+    }
+
+    #[test]
+    fn entity_lookahead_is_bounded_and_fast() {
+        // ';' yok: her '&' en çok 10 karakter ileri bakar, süre doğrusaldır
+        let html = format!("<p>{}</p>", "&".repeat(8 * 1024 * 1024));
+        let start = Instant::now();
+        let text = strip_tags(&html);
+        assert_eq!(text.len(), 8 * 1024 * 1024);
+        let mut c = Collector::new("ab");
+        assert!(c.add_chapter(0, &html));
+        assert!(start.elapsed() < Duration::from_secs(10));
+        // 10 karakterden uzun ad çözülmez, kısa ad çözülür
+        assert_eq!(
+            strip_tags("&amp; &abcdefghijklmn; &#65;"),
+            "& &abcdefghijklmn; A"
+        );
+    }
+
+    #[test]
+    fn expired_deadline_returns_none() {
+        let html = format!("<p>{}</p>", "a ".repeat(200_000));
+        let past = Instant::now() - Duration::from_secs(1);
+        assert!(strip_tags_until(&html, Some(past)).is_none());
+        assert!(strip_tags_until(&html, None).is_some());
     }
 
     #[test]

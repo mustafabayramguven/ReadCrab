@@ -12,7 +12,9 @@ use crate::{
     auth::AdminUser,
     error::AppError,
     formats::{
-        cover::{encode_custom_cover, extract_cover, BookRow},
+        cover::{
+            encode_custom_cover, publish_tmp, render_cover, write_tmp, BookRow, COVER_ENCODE,
+        },
         Format,
     },
 };
@@ -71,23 +73,33 @@ async fn put_cover(
     body: Bytes,
 ) -> Result<Json<CoverVersionRes>, AppError> {
     book_row(&state, id, false).await?;
-    let jpeg = tokio::task::spawn_blocking(move || encode_custom_cover(&body))
-        .await
-        .map_err(|_| AppError::Internal)?
-        .map_err(|()| AppError::BadRequest("Görsel okunamadı."))?;
+    // kodlama sıraya girer: aynı anda tek görsel çözülür
+    let jpeg = {
+        let _slot = COVER_ENCODE
+            .acquire()
+            .await
+            .map_err(|_| AppError::Internal)?;
+        tokio::task::spawn_blocking(move || encode_custom_cover(&body))
+            .await
+            .map_err(|_| AppError::Internal)?
+            .map_err(|()| AppError::BadRequest("Görsel okunamadı."))?
+    };
 
     let covers = state.cfg.data_dir.join("covers");
-    let tmp = covers.join(format!("{id}.jpg.tmp"));
     let dst = covers.join(format!("{id}.jpg"));
-    let written = tokio::task::spawn_blocking(move || {
-        std::fs::create_dir_all(&covers)?;
-        std::fs::write(&tmp, jpeg)?;
-        std::fs::rename(&tmp, &dst)
-    })
-    .await
-    .map_err(|_| AppError::Internal)?;
-    if let Err(e) = written {
-        tracing::error!("özel kapak yazılamadı: {e}");
+    let dir = covers.clone();
+    let tmp = tokio::task::spawn_blocking(move || write_tmp(&dir, id, &jpeg))
+        .await
+        .map_err(|_| AppError::Internal)?
+        .map_err(|e| {
+            tracing::error!("özel kapak yazılamadı: {e}");
+            AppError::Internal
+        })?;
+
+    // yayımlama ve veritabanı güncellemesi tarama/DELETE ile aynı kilit altında
+    let _guard = state.cover_lock.lock().await;
+    if let Err(e) = publish_tmp(&tmp, &dst) {
+        tracing::error!("özel kapak yayımlanamadı: {e}");
         return Err(AppError::Internal);
     }
 
@@ -112,6 +124,7 @@ async fn delete_cover(
     Path(id): Path<i64>,
 ) -> Result<Json<CoverDeleteRes>, AppError> {
     let row = book_row(&state, id, true).await?;
+    let _guard = state.cover_lock.lock().await;
     state
         .db
         .run(move |conn| {
@@ -125,7 +138,11 @@ async fn delete_cover(
         .await?;
 
     let covers = state.cfg.data_dir.join("covers");
-    let has_cover = extract_cover(&state.cfg.books_dir, &row, &covers).await;
+    let dst = covers.join(format!("{id}.jpg"));
+    let has_cover = match render_cover(&state.cfg.books_dir, &row, &covers).await {
+        Some(tmp) => publish_tmp(&tmp, &dst).is_ok(),
+        None => false,
+    };
     if !has_cover {
         let _ = std::fs::remove_file(covers.join(format!("{id}.jpg")));
     }

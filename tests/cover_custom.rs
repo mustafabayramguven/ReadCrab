@@ -58,7 +58,10 @@ async fn custom_cover_lifecycle() {
     let b1 = book_id(&dirs, "Seri/1.cbz").await;
     let b2 = book_id(&dirs, "Seri/2.cbz").await;
     let bad = book_id(&dirs, "Seri/bad.cbz").await;
-    assert_eq!(flags(&dirs, bad).await.0, 0);
+    assert_eq!(flags(&dirs, bad).await, (0, 0, 0));
+    // tarama kapağı yeniden çıkarınca sürüm artar
+    let (has0, custom0, v0) = flags(&dirs, b2).await;
+    assert_eq!((has0, custom0, v0), (1, 0, 1));
 
     // yönetici dışı: 403
     let img = png(800, 1200, [200, 10, 10]);
@@ -73,13 +76,13 @@ async fn custom_cover_lifecycle() {
     let st = put(&app, &admin, b2, "image/png", img).await;
     assert_eq!(st, StatusCode::OK);
     assert_eq!(cover_width(&app, &admin, b2).await, Some(600));
-    assert_eq!(flags(&dirs, b2).await, (1, 1, 1));
+    assert_eq!(flags(&dirs, b2).await, (1, 1, v0 + 1));
     let (_, v) = call(&app, "GET", "/api/series", &admin, None).await;
     assert_eq!(v["items"][0]["cover_book_id"], b2);
-    assert_eq!(v["items"][0]["cover_v"], 1);
+    assert_eq!(v["items"][0]["cover_v"], v0 + 1);
     let detail_uri = format!("/api/books/{b2}");
     let (_, v) = call(&app, "GET", &detail_uri, &admin, None).await;
-    assert_eq!(v["cover_version"], 1);
+    assert_eq!(v["cover_version"], v0 + 1);
 
     // geçersiz girdiler
     let ok_png = png(10, 10, [1, 1, 1]);
@@ -95,7 +98,7 @@ async fn custom_cover_lifecycle() {
         let st = put(&app, &admin, b2, ct, body).await;
         assert_eq!(st.as_u16(), want, "{ct}");
     }
-    assert_eq!(flags(&dirs, b2).await, (1, 1, 1));
+    assert_eq!(flags(&dirs, b2).await, (1, 1, v0 + 1));
     let st = put(&app, &admin, 9999, "image/png", ok_png2()).await;
     assert_eq!(st, StatusCode::NOT_FOUND);
 
@@ -107,14 +110,14 @@ async fn custom_cover_lifecycle() {
     assert!(scan_once(&dirs.state).await);
     let after = std::fs::read(&file).unwrap();
     assert_eq!(before, after);
-    assert_eq!(flags(&dirs, b2).await, (1, 1, 1));
+    assert_eq!(flags(&dirs, b2).await, (1, 1, v0 + 1));
 
     // sil: çıkarılmış kapağa dön, sürüm 2
     let (st, v) = call(&app, "DELETE", &uri, &admin, None).await;
     assert_eq!(st, StatusCode::OK);
-    assert_eq!(v["cover_version"], 2);
+    assert_eq!(v["cover_version"], v0 + 2);
     assert_eq!(v["has_cover"], true);
-    assert_eq!(flags(&dirs, b2).await, (1, 0, 2));
+    assert_eq!(flags(&dirs, b2).await, (1, 0, v0 + 2));
     assert_eq!(cover_width(&app, &admin, b2).await, Some(300));
     let (_, v) = call(&app, "GET", "/api/series", &admin, None).await;
     assert_eq!(v["items"][0]["cover_book_id"], b1);

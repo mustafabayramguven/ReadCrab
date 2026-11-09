@@ -176,6 +176,8 @@ pub struct AppState {
     pub scan: Arc<ScanStatus>,
     pub limiter: Arc<LoginLimiter>,
     pub mobi_cache: Arc<MobiCache>,
+    /// Kapak dosyası yayımlama (tarama, PUT, DELETE) bu kilit altında yapılır.
+    pub cover_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 pub fn build_app(state: AppState) -> Router {

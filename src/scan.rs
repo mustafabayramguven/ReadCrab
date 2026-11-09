@@ -20,7 +20,7 @@ use crate::{
     error::AppError,
     formats::{
         comic::comic_pages,
-        cover::{extract_cover, BookRow},
+        cover::{publish_tmp, render_cover, BookRow},
         epub::epub_open,
         mobi::mobi_open,
         natural::natural_cmp,
@@ -256,6 +256,19 @@ async fn process_single_book(state: &AppState, disc: &DiscoveredFile, covers_dir
         return;
     };
 
+    // kapak önce geçici dosyaya üretilir; yayımlama cover_lock altında, özel kapak yeniden okunarak
+    let rendered = if err_str.is_none() {
+        let row = BookRow {
+            id: book_id,
+            rel_path: disc.rel_path.clone(),
+            format: disc.format,
+        };
+        render_cover(&state.cfg.books_dir, &row, covers_dir).await
+    } else {
+        None
+    };
+
+    let _guard = state.cover_lock.lock().await;
     let custom: i64 = state
         .db
         .run(move |conn| {
@@ -268,27 +281,28 @@ async fn process_single_book(state: &AppState, disc: &DiscoveredFile, covers_dir
         .await
         .unwrap_or(0);
     if custom == 1 {
+        if let Some(tmp) = rendered {
+            let _ = std::fs::remove_file(tmp);
+        }
         return;
     }
 
-    let has_cover = if err_str.is_none() {
-        let row = BookRow {
-            id: book_id,
-            rel_path: disc.rel_path.clone(),
-            format: disc.format,
-        };
-        extract_cover(&state.cfg.books_dir, &row, covers_dir).await
-    } else {
-        false
+    let has_cover = match rendered {
+        Some(tmp) => {
+            let dst = covers_dir.join(format!("{book_id}.jpg"));
+            publish_tmp(&tmp, &dst).is_ok()
+        }
+        None => false,
     };
 
-    let cover_flag = i64::from(has_cover);
+    // yeniden çıkarılan kapakta sürüm artar (tarayıcıdaki ?v= bayatlamaz)
+    let bump = i64::from(has_cover);
     let _ = state
         .db
         .run(move |conn| {
             conn.execute(
-                "UPDATE books SET has_cover = ?1 WHERE id = ?2",
-                rusqlite::params![cover_flag, book_id],
+                "UPDATE books SET has_cover = ?1, cover_version = cover_version + ?1 WHERE id = ?2",
+                rusqlite::params![bump, book_id],
             )?;
             Ok(())
         })
