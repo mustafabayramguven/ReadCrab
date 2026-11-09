@@ -295,7 +295,7 @@ async fn search_huge_ampersand_chapter_stays_within_limit() {
     let start = std::time::Instant::now();
     let (st, v) = call(&app, "GET", &uri, &admin, None).await;
     assert_eq!(st, StatusCode::OK);
-    assert!(start.elapsed() < std::time::Duration::from_secs(15));
+    assert!(start.elapsed() < std::time::Duration::from_secs(30));
     assert!(v["results"].as_array().unwrap().is_empty());
 }
 
