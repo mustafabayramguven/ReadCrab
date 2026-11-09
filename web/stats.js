@@ -343,8 +343,24 @@
       chartCleanups = [];
     }
 
-    function drawHeatmap(data) {
+    // Hücre boyutu kap genişliğine göre: clamp(12, floor((w - 28 - (cols-1)*gap)/cols), 20)
+    function cellSize(cols) {
+      var w = body.clientWidth || scroll.clientWidth || 0;
+      if (!w) return CELL;
+      var c = Math.floor((w - LEFT - (cols - 1) * GAP) / cols);
+      return Math.max(CELL, Math.min(20, c));
+    }
+
+    var lastData = null;
+    var lastCell = 0;
+
+    function drawHeatmap(data, first) {
+      lastData = data;
       var grid = calc.yearGrid(year);
+      var cs = cellSize(grid.cols);
+      lastCell = cs;
+      var step = cs + GAP;
+      var prevScroll = scroll.scrollLeft;
       var byDate = {};
       var values = [];
       (data.days || []).forEach(function (d) {
@@ -352,15 +368,15 @@
         values.push(Number(d.seconds) || 0);
       });
       var th = calc.heatThresholds(values);
-      var width = LEFT + grid.cols * (CELL + GAP);
-      var height = TOP + 7 * (CELL + GAP);
+      var width = LEFT + grid.cols * cs + (grid.cols - 1) * GAP;
+      var height = TOP + 7 * cs + 6 * GAP;
       var svg = svgEl('svg', {
         width: width,
         height: height,
         viewBox: '0 0 ' + width + ' ' + height
       });
       grid.months.forEach(function (m) {
-        var t = svgEl('text', { class: 'axis-label', x: LEFT + m.col * (CELL + GAP), y: 12 });
+        var t = svgEl('text', { class: 'axis-label', x: LEFT + m.col * step, y: 12 });
         t.textContent = m.label;
         svg.appendChild(t);
       });
@@ -368,7 +384,7 @@
         var t = svgEl('text', {
           class: 'axis-label',
           x: 0,
-          y: TOP + r * (CELL + GAP) + CELL - 2
+          y: TOP + r * step + cs - 2
         });
         t.textContent = WEEKDAYS[r];
         svg.appendChild(t);
@@ -385,10 +401,10 @@
           (sec > 0 ? formatDuration(sec) + ', ' + (d.pages || 0) + ' sayfa' : 'okuma yok');
         var rect = svgEl('rect', {
           class: 'hm-cell hm-' + level,
-          x: LEFT + c.col * (CELL + GAP),
-          y: TOP + c.row * (CELL + GAP),
-          width: CELL,
-          height: CELL,
+          x: LEFT + c.col * step,
+          y: TOP + c.row * step,
+          width: cs,
+          height: cs,
           rx: 2,
           role: 'button',
           tabindex: '-1',
@@ -454,7 +470,23 @@
       clearNode(body);
       body.appendChild(scroll);
       body.appendChild(legend);
-      scroll.scrollLeft = scroll.scrollWidth;
+      if (!first) {
+        scroll.scrollLeft = prevScroll;
+      } else if (year === thisYear) {
+        // içinde bulunulan yıl: bugünün sütunu görünür ortalanır
+        var todayCell = grid.cells.filter(function (c) {
+          return c.date === today;
+        })[0];
+        if (todayCell) {
+          var cx = LEFT + todayCell.col * step + cs / 2;
+          scroll.scrollLeft = Math.max(0, cx - scroll.clientWidth / 2);
+        } else {
+          scroll.scrollLeft = scroll.scrollWidth;
+        }
+      } else {
+        // geçmiş yıl: sona kaydırılır
+        scroll.scrollLeft = scroll.scrollWidth;
+      }
     }
 
     function drawRhythm(data) {
@@ -513,7 +545,7 @@
         var data = await KRS.api('GET', '/api/stats/heatmap?year=' + year);
         if (mine !== seq || (gen !== undefined && gen !== KRS.routeGen)) return;
         fillYears(data.years);
-        drawHeatmap(data);
+        drawHeatmap(data, true);
         drawRhythm(data);
       } catch (err) {
         if (mine !== seq || (gen !== undefined && gen !== KRS.routeGen)) return;
@@ -541,8 +573,25 @@
     fillYears([]);
     load();
 
+    // genişlik değişince hücre boyutu yeniden hesaplanır (150 ms debounce)
+    var roTimer = null;
+    var ro = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(function () {
+        if (roTimer) clearTimeout(roTimer);
+        roTimer = setTimeout(function () {
+          if (!lastData) return;
+          var cs = cellSize(calc.yearGrid(year).cols);
+          if (cs !== lastCell) drawHeatmap(lastData, false);
+        }, 150);
+      });
+      ro.observe(body);
+    }
+
     return function cleanup() {
       seq++;
+      if (roTimer) clearTimeout(roTimer);
+      if (ro) ro.disconnect();
       runChartCleanups();
     };
   }

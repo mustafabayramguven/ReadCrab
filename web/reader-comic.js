@@ -487,6 +487,7 @@
     var loading = 0;
     var scrollRaf = 0;
     var restoring = false;
+    var restoreTimer = null;
 
     function maxLoads() {
       return isRar ? 2 : 6;
@@ -518,9 +519,25 @@
       img.addEventListener(
         'error',
         function () {
+          // sayfa çökmez: yer tutucu kalır, hata kutusu ve "Yeniden dene" gösterilir
           h.img = null;
-          h.node.removeChild(img);
-          done();
+          if (img.parentNode) h.node.removeChild(img);
+          loading--;
+          pumpLoads();
+          var box = el('div', { className: 'empty error' }, [
+            icon('error'),
+            el('p', { text: 'Sayfa yüklenemedi.' }),
+            el('button', {
+              type: 'button',
+              className: 'btn tonal',
+              text: 'Yeniden dene',
+              onClick: function () {
+                if (box.parentNode) box.parentNode.removeChild(box);
+                requestLoad(idx);
+              }
+            })
+          ]);
+          h.node.appendChild(box);
         },
         { once: true }
       );
@@ -536,6 +553,10 @@
     }
 
     function visibleIndex() {
+      // alta ulaşıldıysa kısa da olsa son sayfa görünürdür
+      if (webtoon.scrollTop + webtoon.clientHeight >= webtoon.scrollHeight - 2) {
+        return holders.length - 1;
+      }
       var top = webtoon.scrollTop + 0.3 * webtoon.clientHeight;
       for (var i = 0; i < holders.length; i++) {
         var n = holders[i].node;
@@ -618,7 +639,8 @@
       for (var d = -2; d <= 2; d++) requestLoad(start + d);
       holders[start].node.scrollIntoView({ block: 'start' });
       updateUi();
-      setTimeout(function () {
+      restoreTimer = setTimeout(function () {
+        restoreTimer = null;
         restoring = false;
         // geri yükleme sırasında kullanıcı kaydırdıysa yeni konum da kaydedilir
         record(curPage !== start);
@@ -627,6 +649,11 @@
     }
 
     function leaveVertical() {
+      if (restoreTimer) {
+        clearTimeout(restoreTimer);
+        restoreTimer = null;
+      }
+      restoring = false;
       if (observer) {
         observer.disconnect();
         observer = null;
@@ -767,6 +794,7 @@
 
     return function cleanup() {
       disposed = true;
+      if (restoreTimer) clearTimeout(restoreTimer);
       if (hideTimer) clearTimeout(hideTimer);
       if (observer) observer.disconnect();
       if (scrollRaf) cancelAnimationFrame(scrollRaf);

@@ -1969,6 +1969,13 @@
     document.body.classList.remove('reading');
 
     var hash = location.hash || '#/';
+    // tam ekrandan yalnız okuyucu dışı rotaya geçişte çıkılır (sonraki cilde geçişte korunur)
+    if (hash.indexOf('#/oku/') !== 0 && document.fullscreenElement) {
+      try {
+        var exiting = document.exitFullscreen();
+        if (exiting && exiting.catch) exiting.catch(function () {});
+      } catch (_) {}
+    }
     if (hash === '#/kurulum') {
       await renderSetup();
       return;

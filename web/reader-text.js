@@ -49,6 +49,8 @@
     var pageIdx = 0;
     var pageTotal = 1;
     var frameReady = false;
+    var frameGen = 0;
+    var unbinders = [];
     var restoring = false;
     var lastScrollAt = 0;
     var relayoutTimer = null;
@@ -112,7 +114,12 @@
       matches: function (bm) {
         try {
           var loc = JSON.parse(bm.locator);
-          return loc.ch === curChapter && Math.abs(Number(loc.p) - curRatio) < 0.02;
+          if (loc.ch !== curChapter) return false;
+          // sayfa modunda aynı sayfa, kaydırma modunda 0,005 içinde
+          if (isPaged()) {
+            return calc.pageFromRatio(clamp01(loc.p), pageTotal) === pageIdx;
+          }
+          return Math.abs(Number(loc.p) - curRatio) < 0.005;
         } catch (_) {
           return false;
         }
@@ -331,7 +338,8 @@
     }
 
     function persist(overall) {
-      if (!KRS.tracker) return;
+      // yeni çerçeve hazır olana kadar eski konum kaydedilmez
+      if (!KRS.tracker || !frameReady) return;
       KRS.tracker.scheduleProgress(
         book.id,
         JSON.stringify({ ch: curChapter, p: Number(curRatio.toFixed(6)) }),
@@ -417,11 +425,26 @@
           se.scrollTop = Math.round(curRatio * maxScroll);
         }
       }
-      // kaydırma olayları eşzamansız gelir; kilit bir sonraki karede açılır
-      setTimeout(function () {
-        restoring = false;
-      }, 0);
-      updateProgressUi();
+      // kaydırma olayları eşzamansız gelir; kilit çift requestAnimationFrame sonrası açılır
+      var gen = frameGen;
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          if (gen === frameGen) restoring = false;
+        });
+      });
+      // tek sayfa/ekranlık bölümde oran 1 sayılır ve kaydedilir (son bölümse kitap %100)
+      var single = isPaged()
+        ? pageTotal <= 1
+        : se
+          ? se.scrollHeight - se.clientHeight <= 1
+          : false;
+      var promoted = single && curRatio < 1;
+      if (promoted) curRatio = 1;
+      var overall = updateProgressUi();
+      if (promoted) {
+        if (KRS.tracker) KRS.tracker.addPage(curChapter + ':' + pageIdx);
+        persist(overall);
+      }
     }
 
     // Yeniden düzen beklerken eski ölçüye göre yapışma yapılmaz (konumu bozar).
@@ -500,13 +523,36 @@
     }
 
     // ---- Çerçeve olayları ------------------------------------------------------------
+    // Eski belgenin dinleyicileri çerçeve değişirken kaldırılır.
+    function unbindFrame() {
+      var list = unbinders;
+      unbinders = [];
+      list.forEach(function (fn) {
+        try {
+          fn();
+        } catch (_) {}
+      });
+    }
+
     function bindFrameEvents() {
       var doc = frameDoc();
       var win = iframe.contentWindow;
       if (!doc || !win) return;
+      var myFrame = frameGen;
+      function on(target, type, fn, opts) {
+        var wrapped = function (e) {
+          if (myFrame !== frameGen) return;
+          fn(e);
+        };
+        target.addEventListener(type, wrapped, opts);
+        unbinders.push(function () {
+          target.removeEventListener(type, wrapped, opts);
+        });
+      }
 
       var down = null;
-      doc.addEventListener(
+      on(
+        doc,
         'pointerdown',
         function (e) {
           down = { x: e.clientX, y: e.clientY };
@@ -514,7 +560,7 @@
         { passive: true }
       );
 
-      doc.addEventListener('click', function (e) {
+      on(doc, 'click', function (e) {
         if (KRS.tracker) KRS.tracker.touch();
         var a = e.target.closest ? e.target.closest('a') : null;
         if (a) {
@@ -545,7 +591,8 @@
         }
       });
 
-      doc.addEventListener(
+      on(
+        doc,
         'pointermove',
         function () {
           showBars();
@@ -554,17 +601,18 @@
         { passive: true }
       );
 
-      doc.addEventListener('keydown', function (e) {
+      on(doc, 'keydown', function (e) {
         handleKey(e);
       });
 
       // görseller ve yazı tipleri yüklendikçe düzen değişir
-      doc.addEventListener('load', scheduleRelayout, true);
+      on(doc, 'load', scheduleRelayout, true);
       if (doc.fonts && doc.fonts.addEventListener) {
-        doc.fonts.addEventListener('loadingdone', scheduleRelayout);
+        on(doc.fonts, 'loadingdone', scheduleRelayout);
       }
 
-      win.addEventListener(
+      on(
+        win,
         'scroll',
         function () {
           lastScrollAt = Date.now();
@@ -594,6 +642,10 @@
       if (idx < 0 || idx >= totalChapters) return;
       clearErrBox();
       frameReady = false;
+      frameGen++;
+      restoring = true;
+      unbindFrame();
+      if (snapTimer) clearTimeout(snapTimer);
       curChapter = idx;
       curRatio = clamp01(targetRatio);
       updateNavButtons();
@@ -762,6 +814,7 @@
       if (relayoutTimer) clearTimeout(relayoutTimer);
       if (snapTimer) clearTimeout(snapTimer);
       if (resizeObs) resizeObs.disconnect();
+      unbindFrame();
       searchUi.cleanup();
       releaseAwake();
       if (fsBtn && fsBtn.cleanup) fsBtn.cleanup();

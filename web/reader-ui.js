@@ -128,6 +128,7 @@
 
   function openSheet(dlg) {
     if (!dlg.open) dlg.showModal();
+    dlg.dispatchEvent(new Event('sheet-open'));
   }
 
   // Seçenek grubu (radiogroup). Düğmeler yerinde güncellenir, odak kaybolmaz.
@@ -209,6 +210,17 @@
     });
     set(o.value);
     var control = o.wrap ? o.wrap(input) : input;
+    if (o.inline) {
+      // etiket, kaydırıcı ve değer tek satırda (kompakt)
+      return {
+        el: el('div', { className: 'rs-section rs-inline' }, [
+          el('h3', { className: 'type-title-small', text: o.label }),
+          control,
+          out
+        ]),
+        set: set
+      };
+    }
     return {
       el: el('div', { className: 'rs-section' }, [
         el('div', { className: 'rs-title-row' }, [
@@ -283,6 +295,12 @@
         fontBtns[k].setAttribute('aria-checked', k === id ? 'true' : 'false');
       });
     }
+    // seçili yazı tipi yatay listede görünür alana getirilir
+    function revealFont() {
+      var b = fontBtns[prefs.font];
+      if (!b || !fontList.clientWidth) return;
+      fontList.scrollLeft = Math.max(0, b.offsetLeft - (fontList.clientWidth - b.offsetWidth) / 2);
+    }
 
     var fs = sliderRow({
       label: 'Yazı boyutu',
@@ -328,6 +346,7 @@
     });
     var lh = sliderRow({
       label: 'Satır aralığı',
+      inline: true,
       min: 1.2,
       max: 2.2,
       step: 0.1,
@@ -339,6 +358,7 @@
     });
     var ws = sliderRow({
       label: 'Kelime arası',
+      inline: true,
       min: 0,
       max: 0.5,
       step: 0.05,
@@ -352,6 +372,7 @@
     });
     var ls = sliderRow({
       label: 'Harf arası',
+      inline: true,
       min: 0,
       max: 0.1,
       step: 0.01,
@@ -365,6 +386,7 @@
     });
     var mg = sliderRow({
       label: 'Kenar boşluğu',
+      inline: true,
       min: 0,
       max: 20,
       step: 1,
@@ -412,6 +434,7 @@
     function sync() {
       theme.set(resolveTheme(prefs));
       setFont(prefs.font);
+      revealFont();
       fs.set(prefs.fs);
       lh.set(prefs.lh);
       ws.set(prefs.ws);
@@ -437,6 +460,7 @@
       shell.body.appendChild(n);
     });
 
+    shell.dialog.addEventListener('sheet-open', revealFont);
     return { dialog: shell.dialog, sync: sync };
   }
 
@@ -467,14 +491,10 @@
       btn.replaceChild(KRS.icon(on ? 'fullscreen_exit' : 'fullscreen'), btn.firstChild);
     }
     document.addEventListener('fullscreenchange', sync);
+    sync();
+    // tam ekrandan çıkmak okuyucu dışı rotaya geçişte app.js'in işidir (sonraki cilde geçişte korunur)
     btn.cleanup = function () {
       document.removeEventListener('fullscreenchange', sync);
-      if (document.fullscreenElement) {
-        try {
-          var p = document.exitFullscreen();
-          if (p && p.catch) p.catch(noop);
-        } catch (_) {}
-      }
     };
     return btn;
   }
@@ -482,14 +502,19 @@
   function keepAwake() {
     var lock = null;
     var released = false;
+    var acquiring = false;
     function acquire() {
-      if (released || !window.isSecureContext || !navigator.wakeLock) return;
+      if (released || acquiring || lock) return;
+      if (!window.isSecureContext || !navigator.wakeLock) return;
       if (document.visibilityState !== 'visible') return;
+      acquiring = true;
       try {
         navigator.wakeLock
           .request('screen')
           .then(function (l) {
-            if (released) {
+            acquiring = false;
+            if (released || lock) {
+              // fazla veya geç gelen kilit sızdırılmaz
               l.release().catch(noop);
               return;
             }
@@ -498,8 +523,12 @@
               if (lock === l) lock = null;
             });
           })
-          .catch(noop);
-      } catch (_) {}
+          .catch(function () {
+            acquiring = false;
+          });
+      } catch (_) {
+        acquiring = false;
+      }
     }
     function onVisible() {
       if (document.visibilityState === 'visible' && !lock) acquire();
@@ -522,6 +551,7 @@
     var el = KRS.el;
     var items = [];
     var lists = [];
+    var busy = false;
     var btn = el(
       'button',
       {
@@ -587,6 +617,19 @@
     }
 
     async function toggle() {
+      // istek sürerken ikinci tıklama yok sayılır (çift POST olmaz)
+      if (busy) return;
+      busy = true;
+      btn.disabled = true;
+      try {
+        await doToggle();
+      } finally {
+        busy = false;
+        btn.disabled = false;
+      }
+    }
+
+    async function doToggle() {
       var cur = current();
       if (cur) {
         await remove(cur);
@@ -827,10 +870,11 @@
     input.addEventListener('input', function () {
       if (timer) clearTimeout(timer);
       var q = input.value.trim();
+      var len = [...q].length;
       seq++;
-      if (q.length < 2) {
+      if (len < 2 || len > 64) {
         KRS.clearNode(results);
-        setStatus(q.length === 0 ? '' : 'En az 2 karakter girin');
+        setStatus(len === 0 ? '' : len < 2 ? 'En az 2 karakter girin' : 'En çok 64 karakter girin');
         return;
       }
       timer = setTimeout(function () {
