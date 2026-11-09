@@ -39,6 +39,10 @@ done
 body="$(curl -fsS "$BASE/")" || fail "GET / başarısız"
 case "$body" in *ReadCrab*) ;; *) fail "GET / gövdesinde ReadCrab yok" ;; esac
 
+# 4b: PWA manifesti
+code="$(curl -s -o /dev/null -w '%{http_code}' "$BASE/static/manifest.webmanifest")"
+[ "$code" = 200 ] || fail "GET /static/manifest.webmanifest $code (beklenen 200)"
+
 # 5: kimliksiz /api/me 401
 code="$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/me")"
 [ "$code" = 401 ] || fail "GET /api/me çerezsiz $code (beklenen 401)"
