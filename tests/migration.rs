@@ -14,7 +14,9 @@ fn dump(conn: &Connection) -> Vec<(String, Vec<String>)> {
     TABLES
         .iter()
         .map(|t| {
-            let mut stmt = conn.prepare(&format!("SELECT * FROM {t} ORDER BY 1, 2")).unwrap();
+            let mut stmt = conn
+                .prepare(&format!("SELECT * FROM {t} ORDER BY 1, 2"))
+                .unwrap();
             let n = stmt.column_count();
             let rows = stmt
                 .query_map([], |r| {
@@ -60,7 +62,9 @@ fn v1_database_keeps_data() {
 
     drop(Db::open(&path).unwrap());
     let c = Connection::open(&path).unwrap();
-    let v: i32 = c.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+    let v: i32 = c
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .unwrap();
     assert_eq!(v, 2);
     // Eski sütunlar birebir aynı: yeni sütunlar hariç karşılaştır.
     let after = dump(&c);
@@ -74,7 +78,9 @@ fn v1_database_keeps_data() {
             assert_eq!(a, b, "{t}");
         }
     }
-    let n: i64 = c.query_row("SELECT COUNT(*) FROM bookmarks", [], |r| r.get(0)).unwrap();
+    let n: i64 = c
+        .query_row("SELECT COUNT(*) FROM bookmarks", [], |r| r.get(0))
+        .unwrap();
     assert_eq!(n, 0);
 
     drop(Db::open(&path).unwrap());
