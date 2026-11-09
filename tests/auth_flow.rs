@@ -272,7 +272,7 @@ async fn login_rate_limit_burst() {
         }
     }
 
-    assert!(1 <= count_401 && count_401 <= 5, "count_401: {count_401}");
+    assert!((1..=5).contains(&count_401), "count_401: {count_401}");
     assert_eq!(count_401 + count_429, 50);
     assert!(count_429 >= 45, "count_429: {count_429}");
 }
