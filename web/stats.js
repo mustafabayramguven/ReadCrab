@@ -79,7 +79,8 @@
     return { top: count * step, ticks: ticks, empty: false };
   }
 
-  function buildBarChart(titleText, ariaLabel, daily, valueFn, unitLabel, cleanups, mount) {
+  // opts (ritim grafikleri): { labelFn(d), maxLabels } - etiket metni ve dar ekranda en çok etiket sayısı
+  function buildBarChart(titleText, ariaLabel, daily, valueFn, unitLabel, cleanups, mount, opts) {
     var el = KRS.el;
     var clearNode = KRS.clearNode;
     var svg = document.createElementNS(SVG_NS, 'svg');
@@ -144,7 +145,11 @@
       var barW = Math.max(3, slotW * 0.68);
 
       var labelSet = {};
-      if (n > 0) {
+      if (opts && opts.labelFn) {
+        var stepL =
+          opts.maxLabels && w < 600 && n > opts.maxLabels ? Math.ceil(n / opts.maxLabels) : 1;
+        for (var kk = 0; kk < n; kk += stepL) labelSet[kk] = true;
+      } else if (n > 0) {
         if (w < 600) {
           labelSet[0] = true;
           labelSet[Math.floor((n - 1) / 2)] = true;
@@ -161,13 +166,16 @@
       for (var j = 0; j < daily.length; j++) {
         var val = values[j];
         var bx = leftPad + j * slotW + (slotW - barW) / 2;
-        var shortD = formatShortDate(daily[j].date);
+        var shortD = opts && opts.labelFn ? opts.labelFn(daily[j]) : formatShortDate(daily[j].date);
 
         if (val > 0) {
           var barH = Math.max(4, (val / topVal) * plotH);
           var by = topPad + plotH - barH;
           var rect = document.createElementNS(SVG_NS, 'rect');
-          rect.setAttribute('class', j === daily.length - 1 ? 'bar today' : 'bar');
+          rect.setAttribute(
+            'class',
+            !opts && j === daily.length - 1 ? 'bar today' : 'bar'
+          );
           rect.setAttribute('x', bx.toFixed(2));
           rect.setAttribute('y', by.toFixed(2));
           rect.setAttribute('width', barW.toFixed(2));
@@ -230,6 +238,315 @@
     return card;
   }
 
+  var MONTHS_LONG = [
+    'Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran',
+    'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'
+  ];
+  var WEEKDAYS = ['Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz'];
+  var CELL = 12;
+  var GAP = 3;
+  var LEFT = 28;
+  var TOP = 20;
+
+  function svgEl(name, attrs) {
+    var n = document.createElementNS(SVG_NS, name);
+    var keys = Object.keys(attrs || {});
+    for (var i = 0; i < keys.length; i++) n.setAttribute(keys[i], String(attrs[keys[i]]));
+    return n;
+  }
+
+  function minutes(sec) {
+    return sec > 0 ? Math.max(1, Math.round(sec / 60)) : 0;
+  }
+
+  // Yıl ısı haritası ve yılın ritmi; yıl değişince ikisi birlikte yenilenir.
+  function buildYearViews(heatMount, rhythmMount, gen, hooks) {
+    var el = KRS.el;
+    var icon = KRS.icon;
+    var clearNode = KRS.clearNode;
+    var calc = window.KRS_CALC;
+    var thisYear = parseInt(KRS.todayLocal().slice(0, 4), 10);
+    var year = thisYear;
+    var chartCleanups = [];
+    var seq = 0;
+
+    var yearSelect = el('select', { id: 'heatmap-year', className: 'hm-select' });
+    var scroll = el('div', {
+      className: 'heatmap-scroll',
+      role: 'region',
+      'aria-label': 'Okuma takvimi',
+      tabindex: '0'
+    });
+    var body = el('div', { className: 'heatmap-body' });
+    var legend = el('div', { className: 'hm-legend type-label-small', 'aria-hidden': 'true' });
+    var legendSvg = svgEl('svg', {
+      width: 5 * (CELL + GAP) - GAP,
+      height: CELL,
+      viewBox: '0 0 ' + (5 * (CELL + GAP) - GAP) + ' ' + CELL
+    });
+    for (var li = 0; li < 5; li++) {
+      legendSvg.appendChild(
+        svgEl('rect', {
+          class: 'hm-cell hm-' + li,
+          x: li * (CELL + GAP),
+          y: 0,
+          width: CELL,
+          height: CELL,
+          rx: 2
+        })
+      );
+    }
+    legend.appendChild(el('span', { text: 'Az' }));
+    legend.appendChild(legendSvg);
+    legend.appendChild(el('span', { text: 'Çok' }));
+
+    heatMount.appendChild(
+      el('div', { className: 'heatmap-head' }, [
+        el('h2', { className: 'type-title-medium', text: 'Okuma takvimi' }),
+        el('div', { className: 'hm-year' }, [
+          el('label', { for: 'heatmap-year', className: 'type-label-large', text: 'Yıl' }),
+          yearSelect
+        ])
+      ])
+    );
+    heatMount.appendChild(body);
+
+    var rhythmTitle = el('h2', { className: 'type-title-medium', text: 'Yılın ritmi' });
+    rhythmMount.appendChild(rhythmTitle);
+    var rhythmBody = el('div', { className: 'rhythm-body' });
+    rhythmMount.appendChild(rhythmBody);
+
+    function fillYears(years) {
+      var set = {};
+      (years || []).forEach(function (y) {
+        set[y] = true;
+      });
+      set[thisYear] = true;
+      set[year] = true;
+      var list = Object.keys(set)
+        .map(Number)
+        .sort(function (a, b) {
+          return b - a;
+        });
+      clearNode(yearSelect);
+      list.forEach(function (y) {
+        var o = el('option', { value: String(y), text: String(y) });
+        if (y === year) o.selected = true;
+        yearSelect.appendChild(o);
+      });
+    }
+
+    function runChartCleanups() {
+      chartCleanups.forEach(function (c) {
+        c();
+      });
+      chartCleanups = [];
+    }
+
+    function drawHeatmap(data) {
+      var grid = calc.yearGrid(year);
+      var byDate = {};
+      var values = [];
+      (data.days || []).forEach(function (d) {
+        byDate[d.date] = d;
+        values.push(Number(d.seconds) || 0);
+      });
+      var th = calc.heatThresholds(values);
+      var width = LEFT + grid.cols * (CELL + GAP);
+      var height = TOP + 7 * (CELL + GAP);
+      var svg = svgEl('svg', {
+        width: width,
+        height: height,
+        viewBox: '0 0 ' + width + ' ' + height
+      });
+      grid.months.forEach(function (m) {
+        var t = svgEl('text', { class: 'axis-label', x: LEFT + m.col * (CELL + GAP), y: 12 });
+        t.textContent = m.label;
+        svg.appendChild(t);
+      });
+      [0, 2, 4].forEach(function (r) {
+        var t = svgEl('text', {
+          class: 'axis-label',
+          x: 0,
+          y: TOP + r * (CELL + GAP) + CELL - 2
+        });
+        t.textContent = WEEKDAYS[r];
+        svg.appendChild(t);
+      });
+
+      var cells = [];
+      var today = KRS.todayLocal();
+      var focusIdx = 0;
+      grid.cells.forEach(function (c, idx) {
+        var d = byDate[c.date];
+        var sec = d ? Number(d.seconds) || 0 : 0;
+        var level = calc.heatLevel(sec, th);
+        var label = formatHistoryDate(c.date) + ': ' +
+          (sec > 0 ? formatDuration(sec) + ', ' + (d.pages || 0) + ' sayfa' : 'okuma yok');
+        var rect = svgEl('rect', {
+          class: 'hm-cell hm-' + level,
+          x: LEFT + c.col * (CELL + GAP),
+          y: TOP + c.row * (CELL + GAP),
+          width: CELL,
+          height: CELL,
+          rx: 2,
+          role: 'button',
+          tabindex: '-1',
+          'aria-label': label,
+          'data-date': c.date
+        });
+        var title = svgEl('title', {});
+        title.textContent = label;
+        rect.appendChild(title);
+        if (hooks.getDate() === c.date) {
+          rect.classList.add('selected');
+          focusIdx = idx;
+        } else if (!hooks.getDate() && c.date === today) {
+          focusIdx = idx;
+        }
+        rect.addEventListener('click', function () {
+          pick(idx);
+        });
+        cells.push(rect);
+        svg.appendChild(rect);
+      });
+
+      var cur = focusIdx;
+      cells[cur].setAttribute('tabindex', '0');
+      function moveTo(i) {
+        var n = Math.max(0, Math.min(cells.length - 1, i));
+        cells[cur].setAttribute('tabindex', '-1');
+        cur = n;
+        cells[cur].setAttribute('tabindex', '0');
+        cells[cur].focus();
+      }
+      function pick(i) {
+        var date = grid.cells[i].date;
+        hooks.setDate(hooks.getDate() === date ? null : date);
+        cells.forEach(function (c, k) {
+          c.classList.toggle('selected', hooks.getDate() === grid.cells[k].date);
+        });
+        moveTo(i);
+      }
+      svg.addEventListener('keydown', function (e) {
+        var step = null;
+        if (e.key === 'ArrowLeft') step = -7;
+        else if (e.key === 'ArrowRight') step = 7;
+        else if (e.key === 'ArrowUp') step = -1;
+        else if (e.key === 'ArrowDown') step = 1;
+        if (step !== null) {
+          e.preventDefault();
+          moveTo(cur + step);
+        } else if (e.key === 'Home') {
+          e.preventDefault();
+          moveTo(0);
+        } else if (e.key === 'End') {
+          e.preventDefault();
+          moveTo(cells.length - 1);
+        } else if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          pick(cur);
+        }
+      });
+
+      clearNode(scroll);
+      scroll.appendChild(svg);
+      clearNode(body);
+      body.appendChild(scroll);
+      body.appendChild(legend);
+      scroll.scrollLeft = scroll.scrollWidth;
+    }
+
+    function drawRhythm(data) {
+      runChartCleanups();
+      clearNode(rhythmBody);
+      var days = data.days || [];
+      var sum = calc.yearSummary(days);
+      if (sum.daysRead === 0) {
+        rhythmBody.appendChild(el('p', { className: 'type-body-medium rhythm-empty', text: 'Bu yıl için veri yok' }));
+        return;
+      }
+      var mt = calc.monthTotals(days);
+      var wt = calc.weekdayTotals(days);
+      var monthData = mt.map(function (sec, i) {
+        return { label: MONTHS_SHORT[i], seconds: sec };
+      });
+      var weekData = wt.map(function (sec, i) {
+        return { label: WEEKDAYS[i], seconds: sec };
+      });
+      function valueFn(d) {
+        return minutes(d.seconds);
+      }
+      function labelFn(d) {
+        return d.label;
+      }
+      rhythmBody.appendChild(
+        buildBarChart('Aylara göre okuma (dk)', year + ' yılında aya göre okuma süresi', monthData, valueFn, 'dk', chartCleanups, rhythmBody, { labelFn: labelFn, maxLabels: 6 })
+      );
+      rhythmBody.appendChild(
+        buildBarChart('Haftanın günlerine göre okuma (dk)', year + ' yılında haftanın gününe göre okuma süresi', weekData, valueFn, 'dk', chartCleanups, rhythmBody, { labelFn: labelFn })
+      );
+      function item(term, value, help) {
+        return el('div', { className: 'summary-item' }, [
+          el('dt', { className: 'type-label-medium', text: term }),
+          el('dd', {}, [
+            el('span', { className: 'type-title-medium summary-value', text: value }),
+            help ? el('span', { className: 'type-body-small summary-help', text: help }) : null
+          ])
+        ]);
+      }
+      rhythmBody.appendChild(
+        el('dl', { className: 'summary-grid' }, [
+          item('En çok okuduğun ay', MONTHS_LONG[sum.bestMonth] + ' · ' + formatDuration(sum.bestMonthSeconds)),
+          item('En çok okuduğun gün', formatHistoryDate(sum.bestDay) + ' · ' + formatDuration(sum.bestDaySeconds)),
+          item('Okuduğun gün sayısı', sum.daysRead + ' gün'),
+          item('Günlük ortalama', formatDuration(Math.round(sum.avgPerDay)), 'Okuduğun günler üzerinden hesaplanır.')
+        ])
+      );
+    }
+
+    async function load() {
+      var mine = ++seq;
+      clearNode(body);
+      for (var k = 0; k < 2; k++) body.appendChild(el('div', { className: 'skeleton skeleton-row' }));
+      try {
+        var data = await KRS.api('GET', '/api/stats/heatmap?year=' + year);
+        if (mine !== seq || (gen !== undefined && gen !== KRS.routeGen)) return;
+        fillYears(data.years);
+        drawHeatmap(data);
+        drawRhythm(data);
+      } catch (err) {
+        if (mine !== seq || (gen !== undefined && gen !== KRS.routeGen)) return;
+        clearNode(body);
+        body.appendChild(
+          el('div', { className: 'empty error' }, [
+            icon('error'),
+            el('h2', { text: 'Yüklenemedi' }),
+            el('p', { text: err.message }),
+            el('button', {
+              type: 'button',
+              className: 'btn tonal',
+              text: 'Yeniden dene',
+              onClick: load
+            })
+          ])
+        );
+      }
+    }
+
+    yearSelect.addEventListener('change', function () {
+      year = parseInt(yearSelect.value, 10);
+      load();
+    });
+    fillYears([]);
+    load();
+
+    return function cleanup() {
+      seq++;
+      runChartCleanups();
+    };
+  }
+
   async function renderHistory(mount, gen) {
     var myGen = gen !== undefined ? gen : KRS.routeGen;
     var el = KRS.el;
@@ -237,52 +554,112 @@
     var clearNode = KRS.clearNode;
     clearNode(mount);
 
-    var skelWrap = el('div', { className: 'list' });
-    for (var s = 0; s < 4; s++) {
-      skelWrap.appendChild(el('div', { className: 'skeleton skeleton-row' }));
-    }
-    mount.appendChild(skelWrap);
-
     var limit = 50;
     var offset = 0;
     var total = 0;
+    var dateFilter = null;
+    var listSeq = 0;
+
+    var heatCard = el('section', { className: 'section-card heatmap-card' });
+    var rhythm = el('section', { className: 'rhythm' });
+    var chipWrap = el('div', { className: 'history-filter' });
+    var listArea = el('div', { className: 'history-list' });
+    mount.appendChild(heatCard);
+    mount.appendChild(rhythm);
+    mount.appendChild(chipWrap);
+    mount.appendChild(listArea);
+
+    var cleanupYear = buildYearViews(heatCard, rhythm, myGen, {
+      getDate: function () {
+        return dateFilter;
+      },
+      setDate: function (d) {
+        dateFilter = d;
+        renderChip();
+        reload();
+      }
+    });
+
+    function renderChip() {
+      clearNode(chipWrap);
+      if (!dateFilter) return;
+      chipWrap.appendChild(
+        el(
+          'button',
+          {
+            type: 'button',
+            className: 'chip',
+            'aria-label': 'Gün süzgecini kaldır',
+            onClick: function () {
+              dateFilter = null;
+              renderChip();
+              document.querySelectorAll('.hm-cell.selected').forEach(function (c) {
+                c.classList.remove('selected');
+              });
+              reload();
+            }
+          },
+          [formatHistoryDate(dateFilter) + ' ×']
+        )
+      );
+    }
 
     var ul = el('ul', { id: 'history-table', className: 'list' });
     var moreWrap = el('div', { className: 'setting-row' });
     var moreBtn = null;
 
+    function reload() {
+      offset = 0;
+      total = 0;
+      ul = el('ul', { id: 'history-table', className: 'list' });
+      moreBtn = null;
+      moreWrap = el('div', { className: 'setting-row' });
+      loadPage(true);
+    }
+
     async function loadPage(firstLoad) {
-      if (!firstLoad && moreBtn) {
+      var mine = ++listSeq;
+      if (firstLoad) {
+        clearNode(listArea);
+        var skelWrap = el('div', { className: 'list' });
+        for (var s = 0; s < 4; s++) {
+          skelWrap.appendChild(el('div', { className: 'skeleton skeleton-row' }));
+        }
+        listArea.appendChild(skelWrap);
+      } else if (moreBtn) {
         moreBtn.disabled = true;
       }
       try {
         var res = await KRS.api(
           'GET',
-          '/api/history?limit=' + limit + '&offset=' + offset
+          '/api/history?limit=' + limit + '&offset=' + offset +
+            (dateFilter ? '&date=' + encodeURIComponent(dateFilter) : '')
         );
-        if (myGen !== undefined && myGen !== KRS.routeGen) {
+        if ((myGen !== undefined && myGen !== KRS.routeGen) || mine !== listSeq) {
           return;
         }
         if (firstLoad) {
-          clearNode(mount);
+          clearNode(listArea);
         }
         var items = (res && res.items) || [];
         total = Number((res && res.total) || 0);
 
         if (firstLoad && items.length === 0) {
-          mount.appendChild(ul);
-          mount.appendChild(
+          listArea.appendChild(ul);
+          listArea.appendChild(
             el('div', { className: 'empty' }, [
               icon('history'),
-              el('h2', { text: 'Henüz okuma kaydı yok' })
+              el('h2', {
+                text: dateFilter ? 'Bu günde okuma kaydı yok' : 'Henüz okuma kaydı yok'
+              })
             ])
           );
           return;
         }
 
         if (firstLoad) {
-          mount.appendChild(ul);
-          mount.appendChild(moreWrap);
+          listArea.appendChild(ul);
+          listArea.appendChild(moreWrap);
         }
 
         for (var i = 0; i < items.length; i++) {
@@ -339,7 +716,7 @@
           moreWrap.appendChild(moreBtn);
         }
       } catch (err) {
-        if (myGen !== undefined && myGen !== KRS.routeGen) {
+        if ((myGen !== undefined && myGen !== KRS.routeGen) || mine !== listSeq) {
           return;
         }
         if (!firstLoad) {
@@ -347,8 +724,8 @@
           if (KRS.toast) KRS.toast(err.message);
           return;
         }
-        clearNode(mount);
-        mount.appendChild(
+        clearNode(listArea);
+        listArea.appendChild(
           el('div', { className: 'empty error' }, [
             icon('error'),
             el('h2', { text: 'Yüklenemedi' }),
@@ -358,7 +735,7 @@
               className: 'btn tonal',
               text: 'Yeniden dene',
               onClick: function () {
-                renderHistory(mount, myGen);
+                loadPage(true);
               }
             })
           ])
@@ -367,6 +744,7 @@
     }
 
     await loadPage(true);
+    return cleanupYear;
   }
 
   async function renderStats(mount, gen) {

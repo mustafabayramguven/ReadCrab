@@ -467,7 +467,7 @@
     }
   }
 
-  function makeCoverNode(bookId, titleText) {
+  function makeCoverNode(bookId, titleText, v) {
     var firstChar = (String(titleText || '?').trim().charAt(0) || '?').toUpperCase();
     var fallback = el('div', { className: 'cover-fallback', text: firstChar });
     if (!bookId) {
@@ -476,7 +476,7 @@
     var img = el('img', {
       loading: 'lazy',
       alt: '',
-      src: '/api/books/' + bookId + '/cover'
+      src: '/api/books/' + bookId + '/cover' + (v !== undefined && v !== null ? '?v=' + v : '')
     });
     img.addEventListener('error', function () {
       if (img.parentNode) {
@@ -766,8 +766,49 @@
     }
     buildChips();
 
+    var shelfTrack = el('ul', { className: 'shelf-track' });
+    var shelf = el('section', { className: 'shelf', 'aria-label': 'Okumaya devam et' }, [
+      el('h2', { className: 'type-title-medium', text: 'Okumaya devam et' }),
+      shelfTrack
+    ]);
+    shelf.hidden = true;
+    var shelfCount = 0;
+
+    // Raf yalnız süzgeç yokken görünür; DOM'da kalır.
+    function updateShelf() {
+      shelf.hidden = !(shelfCount > 0 && state.q === '' && state.status === 'all');
+    }
+
+    async function loadShelf() {
+      try {
+        var res = await api('GET', '/api/continue');
+        if (!active || myGen !== KRS.routeGen) return;
+        var items = (res && res.items) || [];
+        clearNode(shelfTrack);
+        for (var k = 0; k < items.length; k++) {
+          var it = items[k];
+          shelfTrack.appendChild(
+            el('li', {}, [
+              el('a', { href: '#/oku/' + it.book_id, className: 'shelf-card' }, [
+                el('div', { className: 'shelf-cover' }, [
+                  makeCoverNode(it.book_id, it.title, it.cover_v)
+                ]),
+                el('span', { className: 'shelf-title type-label-large', text: it.title }),
+                createLinearProgress(it.percent || 0, it.title + ' ilerlemesi')
+              ])
+            ])
+          );
+        }
+        shelfCount = items.length;
+        updateShelf();
+      } catch (_) {
+        // raf yardımcıdır; hata sessiz
+      }
+    }
+
     var controls = el('div', { className: 'library-controls' }, [
       searchBar,
+      shelf,
       el('div', { className: 'chip-row' }, [sortGroup, statusGroup])
     ]);
     var contentArea = el('div');
@@ -845,7 +886,7 @@
       for (var i = 0; i < items.length; i++) {
         var it = items[i];
         var coverChildren = [
-          makeCoverNode(it.cover_book_id, it.name),
+          makeCoverNode(it.cover_book_id, it.name, it.cover_v),
           createLinearProgress(it.percent || 0, it.name + ' okuma ilerlemesi')
         ];
         if (it.book_count > 0 && it.read_count === it.book_count) {
@@ -898,6 +939,7 @@
       loading = true;
       var mySeq = ++seq;
       var reqOffset = isReset ? 0 : offset;
+      updateShelf();
 
       var qs =
         '?q=' +
@@ -1017,6 +1059,7 @@
     }
 
     loadSeries(true);
+    loadShelf();
     pollScan(false);
 
     setCleanup(function () {
@@ -1040,6 +1083,130 @@
   function isComicFormat(fmt) {
     var f = String(fmt || '').toLowerCase();
     return f === 'cbz' || f === 'zip' || f === 'rar' || f === 'cbr';
+  }
+
+  function openCoverDialog(book, onSaved) {
+    var dlg = el('dialog', { className: 'md-dialog', 'aria-labelledby': 'cover-dlg-title' });
+    var objectUrl = null;
+    var fileInput = el('input', {
+      type: 'file',
+      id: 'cover-file',
+      accept: 'image/jpeg,image/png,image/webp'
+    });
+    var preview = el('img', { className: 'cover-preview', alt: 'Seçilen kapak önizlemesi' });
+    preview.hidden = true;
+    var msg = el('p', { className: 'field-help cover-msg', role: 'alert' });
+    var uploadBtn = el('button', {
+      type: 'button',
+      className: 'btn filled',
+      text: 'Yükle',
+      disabled: true
+    });
+    var removeBtn = el('button', {
+      type: 'button',
+      className: 'btn text',
+      text: 'Özel kapağı kaldır'
+    });
+    var closeBtn = el('button', {
+      type: 'button',
+      className: 'btn text',
+      text: 'Kapat',
+      onClick: function () {
+        dlg.close();
+      }
+    });
+
+    function setMsg(t) {
+      msg.textContent = t || '';
+    }
+    function releasePreview() {
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+        objectUrl = null;
+      }
+    }
+
+    fileInput.addEventListener('change', function () {
+      releasePreview();
+      setMsg('');
+      var f = fileInput.files && fileInput.files[0];
+      uploadBtn.disabled = !f;
+      preview.hidden = !f;
+      if (f) {
+        objectUrl = URL.createObjectURL(f);
+        preview.src = objectUrl;
+      }
+    });
+
+    uploadBtn.addEventListener('click', async function () {
+      var f = fileInput.files && fileInput.files[0];
+      if (!f) return;
+      if (f.size > 10 * 1024 * 1024) {
+        setMsg("Dosya 10 MB'tan büyük.");
+        return;
+      }
+      uploadBtn.disabled = true;
+      try {
+        var res = await fetch('/api/books/' + book.id + '/cover', {
+          method: 'PUT',
+          headers: { 'Content-Type': f.type },
+          body: f,
+          credentials: 'same-origin'
+        });
+        if (res.status === 401) {
+          dlg.close();
+          navigate('#/giris');
+          return;
+        }
+        if (!res.ok) {
+          var text = 'Kapak yüklenemedi.';
+          try {
+            var j = await res.json();
+            if (j && j.message) text = j.message;
+          } catch (_) {}
+          setMsg(text);
+          toast(text);
+          uploadBtn.disabled = false;
+          return;
+        }
+        dlg.close();
+        toast('Kapak güncellendi');
+        onSaved();
+      } catch (err) {
+        setMsg('Kapak yüklenemedi.');
+        uploadBtn.disabled = false;
+      }
+    });
+
+    removeBtn.addEventListener('click', async function () {
+      removeBtn.disabled = true;
+      try {
+        await api('DELETE', '/api/books/' + book.id + '/cover');
+        dlg.close();
+        toast('Özel kapak kaldırıldı');
+        onSaved();
+      } catch (err) {
+        setMsg(err.message);
+        removeBtn.disabled = false;
+      }
+    });
+
+    dlg.appendChild(el('h2', { id: 'cover-dlg-title', className: 'dialog-title', text: 'Kapağı değiştir' }));
+    dlg.appendChild(
+      el('div', { className: 'dialog-body' }, [
+        el('label', { for: 'cover-file', className: 'type-body-large', text: 'Görsel seç' }),
+        fileInput,
+        preview,
+        msg
+      ])
+    );
+    dlg.appendChild(el('div', { className: 'dialog-actions' }, [removeBtn, closeBtn, uploadBtn]));
+    dlg.addEventListener('close', function () {
+      releasePreview();
+      dlg.remove();
+    });
+    document.body.appendChild(dlg);
+    dlg.showModal();
   }
 
   function openBookStatusDialog(book, onSaved) {
@@ -1101,6 +1268,19 @@
       }
     });
 
+    if (KRS.me && KRS.me.is_admin) {
+      body.appendChild(
+        el('button', {
+          type: 'button',
+          className: 'btn tonal',
+          text: 'Kapağı değiştir',
+          onClick: function () {
+            dlg.close();
+            openCoverDialog(book, onSaved);
+          }
+        })
+      );
+    }
     dlg.appendChild(el('h2', { className: 'dialog-title', text: 'Okuma durumu' }));
     dlg.appendChild(body);
     dlg.appendChild(el('div', { className: 'dialog-actions' }, [cancelBtn, saveBtn]));
@@ -1142,7 +1322,7 @@
           }
 
           var thumb = el('div', { className: 'list-thumb' }, [
-            makeCoverNode(b.id, b.title)
+            makeCoverNode(b.id, b.title, b.cover_v)
           ]);
           var content = el('div', { className: 'list-content' }, [
             el('h2', { className: 'list-title', text: b.title }),
@@ -1830,7 +2010,12 @@
     } else if (hash === '#/gecmis') {
       setTopBar({ title: 'Geçmiş' });
       if (KRS.stats && typeof KRS.stats.renderHistory === 'function') {
-        KRS.stats.renderHistory(mainPage, gen);
+        var cleanupHistory = await KRS.stats.renderHistory(mainPage, gen);
+        if (gen !== KRS.routeGen) {
+          if (typeof cleanupHistory === 'function') cleanupHistory();
+          return;
+        }
+        setCleanup(cleanupHistory);
       }
     } else if (hash === '#/istatistik') {
       setTopBar({ title: 'İstatistik' });
