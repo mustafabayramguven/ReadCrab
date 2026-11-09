@@ -23,6 +23,7 @@ NAMES = [
     "format_list_bulleted", "text_fields", "tune", "fit_screen", "fullscreen", "auto_stories",
     "light_mode", "dark_mode", "palette",
     "schedule", "flag", "local_fire_department",
+    "bookmark", "bookmark-fill", "fullscreen_exit", "image",
 ]
 
 
