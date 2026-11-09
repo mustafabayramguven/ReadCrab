@@ -27,11 +27,27 @@
     } catch (_) {}
   }
 
+  function getSaved(key, allowed, def) {
+    try {
+      var v = localStorage.getItem(key);
+      if (allowed.indexOf(v) >= 0) return v;
+    } catch (_) {}
+    return def;
+  }
+
+  function save(key, v) {
+    try {
+      localStorage.setItem(key, v);
+    } catch (_) {}
+  }
+
   async function open(book, mount, gen) {
     var myGen = gen !== undefined ? gen : KRS.routeGen;
     var el = KRS.el;
     var icon = KRS.icon;
     var clearNode = KRS.clearNode;
+    var ui = KRS.readerUi;
+    var calc = window.KRS_CALC;
     clearNode(mount);
 
     var pagesRes = await KRS.api('GET', '/api/books/' + book.id + '/pages');
@@ -45,18 +61,25 @@
     }
     var curPage = initialPage;
     var curFit = getSavedFit();
+    var dirKey = 'krs.dir.' + book.id;
+    var modeKey = 'krs.cmode.' + book.id;
+    var curDir = getSaved(dirKey, ['ltr', 'rtl'], 'ltr');
+    var curMode = getSaved(modeKey, ['page', 'vertical'], 'page');
+    var disposed = false;
 
     var readerEl = el('div', { className: 'reader comic' });
+    var black = Boolean(window.KRS_THEME && window.KRS_THEME.getBlack && window.KRS_THEME.getBlack());
     if (window.KRS_THEME) {
-      var darkPal = window.KRS_THEME.generatePalette(window.KRS_THEME.getSeed(), true);
+      var darkPal = window.KRS_THEME.generatePalette(window.KRS_THEME.getSeed(), true, black);
       var palKeys = Object.keys(darkPal);
       for (var pk = 0; pk < palKeys.length; pk++) {
         readerEl.style.setProperty('--md-sys-color-' + palKeys[pk], darkPal[palKeys[pk]]);
       }
-      readerEl.style.background = darkPal['surface-container-lowest'];
+      readerEl.style.background = black ? '#000000' : darkPal['surface-container-lowest'];
       readerEl.style.color = darkPal['on-surface'];
     }
 
+    // ---- Üst çubuk -------------------------------------------------------------
     var backBtn = el(
       'button',
       {
@@ -82,18 +105,33 @@
       },
       [icon('tune')]
     );
-    var topBar = el('div', { className: 'reader-bar top' }, [
-      backBtn,
-      titleEl,
-      settingsBtn
-    ]);
+    var bookmarks = ui.bookmarkController(book, {
+      getLocator: function () {
+        return String(curPage);
+      },
+      getLabel: function () {
+        return 'Sayfa ' + (curPage + 1);
+      },
+      matches: function (bm) {
+        return bm.locator === String(curPage);
+      }
+    });
+    var fsBtn = ui.fullscreenButton();
+    var topBar = el(
+      'div',
+      { className: 'reader-bar top' },
+      [backBtn, titleEl, bookmarks.toggleBtn, fsBtn, settingsBtn].filter(Boolean)
+    );
 
+    // ---- Sahne -----------------------------------------------------------------
     var pageImg = el('img', {
       className: 'reader-page-img',
       alt: book.title + ' sayfa'
     });
     var stage = el('div', { className: 'reader-stage fit-' + curFit }, [pageImg]);
+    var webtoon = null;
 
+    // ---- Alt çubuk -------------------------------------------------------------
     var progFill = el('div', { className: 'progress-linear-bar' });
     var progTrack = el(
       'div',
@@ -112,6 +150,7 @@
       className: 'type-label-medium',
       text: curPage + 1 + ' / ' + total
     });
+    var eta = ui.etaLabel(book);
     var prevBtn = el(
       'button',
       {
@@ -119,7 +158,7 @@
         className: 'icon-btn',
         'aria-label': 'Önceki sayfa',
         onClick: function () {
-          goToPage(curPage - 1, true);
+          step(-1);
         }
       },
       [icon('chevron_left')]
@@ -131,57 +170,86 @@
         className: 'icon-btn',
         'aria-label': 'Sonraki sayfa',
         onClick: function () {
-          goToPage(curPage + 1, true);
+          step(1);
         }
       },
       [icon('chevron_right')]
     );
-    var bottomBar = el('div', { className: 'reader-bar bottom' }, [
-      el('div', { className: 'reader-progress-wrap' }, [progTrack, pageInd]),
-      prevBtn,
-      nextBtn
-    ]);
+    var progWrap = el('div', { className: 'reader-progress-wrap' }, [progTrack, pageInd, eta.el]);
+    var bottomBar = el('div', { className: 'reader-bar bottom' }, [progWrap, prevBtn, nextBtn]);
+    var nextVolume = ui.nextVolumeCard(book);
 
-    var sheet = el('dialog', { className: 'sheet', 'aria-label': 'Okuyucu ayarları' });
+    // ---- Ayarlar alt sayfası -----------------------------------------------------
+    var shell = ui.sheetShell({
+      title: 'Okuma ayarları',
+      label: 'Okuyucu ayarları',
+      className: 'reader-settings'
+    });
+    var sheet = shell.dialog;
+
+    var viewSeg = ui.segmented(
+      'Görünüm',
+      [
+        { key: 'page', label: 'Sayfa' },
+        { key: 'vertical', label: 'Dikey' }
+      ],
+      curMode,
+      function (k) {
+        setMode(k);
+      }
+    );
+    var dirSeg = ui.segmented(
+      'Okuma yönü',
+      [
+        { key: 'ltr', label: 'Soldan sağa' },
+        { key: 'rtl', label: 'Sağdan sola' }
+      ],
+      curDir,
+      function (k) {
+        setDir(k);
+      }
+    );
     var fitGroup = el('div', {
       className: 'segmented',
       role: 'radiogroup',
       'aria-label': 'Sığdırma modu'
     });
-    sheet.appendChild(el('div', { className: 'sheet-handle' }));
-    sheet.appendChild(
-      el('div', { className: 'section-stack' }, [
-        el('div', { className: 'setting-row' }, [
-          el('h2', { className: 'type-title-medium', text: 'Ayarlar' }),
-          el(
-            'button',
-            {
-              type: 'button',
-              className: 'icon-btn',
-              'aria-label': 'Kapat',
-              onClick: function () {
-                sheet.close();
-              }
-            },
-            [icon('close')]
-          )
-        ]),
-        el('div', { className: 'section-stack' }, [
-          el('span', { className: 'type-body-large', text: 'Sığdırma modu' }),
-          fitGroup
-        ])
-      ])
+    var fitSection = ui.section('Sığdırma modu', fitGroup);
+    var listSheet = ui.sheetShell({ title: 'Yer imleri', label: 'Yer imleri' });
+    listSheet.body.appendChild(
+      bookmarks.buildList(function (bm) {
+        var n = parseInt(bm.locator, 10);
+        if (!Number.isFinite(n)) return;
+        listSheet.dialog.close();
+        if (curMode === 'vertical') {
+          scrollToPage(n);
+        } else {
+          goToPage(n, true);
+        }
+      })
     );
-    sheet.addEventListener('click', function (e) {
-      if (e.target === sheet) {
+    var marksBtn = el('button', {
+      type: 'button',
+      className: 'btn tonal rs-reset',
+      text: 'Yer imleri',
+      onClick: function () {
         sheet.close();
+        ui.openSheet(listSheet.dialog);
       }
+    });
+    [
+      ui.section('Görünüm', viewSeg.el),
+      ui.section('Okuma yönü', dirSeg.el),
+      fitSection,
+      el('div', { className: 'rs-actions' }, [marksBtn])
+    ].forEach(function (n) {
+      shell.body.appendChild(n);
     });
 
     function applyFit(mode) {
       curFit = mode;
       saveFit(mode);
-      stage.className = 'reader-stage fit-' + curFit;
+      if (curMode === 'page') stage.className = 'reader-stage fit-' + curFit;
       clearNode(fitGroup);
       for (var i = 0; i < FIT_MODES.length; i++) {
         (function (m) {
@@ -210,22 +278,26 @@
 
     function openSettingsSheet() {
       showBars();
-      if (!sheet.open) {
-        sheet.showModal();
-      }
+      ui.openSheet(sheet);
     }
 
     readerEl.appendChild(topBar);
     readerEl.appendChild(stage);
     readerEl.appendChild(bottomBar);
+    if (nextVolume) readerEl.appendChild(nextVolume);
     readerEl.appendChild(sheet);
+    readerEl.appendChild(listSheet.dialog);
     mount.appendChild(readerEl);
 
+    // ---- Çubuklar ---------------------------------------------------------------
     var hideTimer = null;
+    function anySheetOpen() {
+      return sheet.open || listSheet.dialog.open;
+    }
     function scheduleHideBars() {
       if (hideTimer) clearTimeout(hideTimer);
       hideTimer = setTimeout(function () {
-        if (sheet.open) return;
+        if (anySheetOpen()) return;
         var active = document.activeElement;
         if (active && (topBar.contains(active) || bottomBar.contains(active))) {
           return;
@@ -250,6 +322,82 @@
       }
     }
 
+    // ---- Yön ve görünüm -----------------------------------------------------------
+    function rtl() {
+      return curDir === 'rtl' && curMode === 'page';
+    }
+
+    function layoutBottom() {
+      clearNode(bottomBar);
+      var wrap = progWrap;
+      if (curMode === 'vertical') {
+        prevBtn.hidden = true;
+        nextBtn.hidden = true;
+        bottomBar.appendChild(wrap);
+        return;
+      }
+      prevBtn.hidden = false;
+      nextBtn.hidden = false;
+      var r = rtl();
+      prevBtn.replaceChild(icon(r ? 'chevron_right' : 'chevron_left'), prevBtn.firstChild);
+      nextBtn.replaceChild(icon(r ? 'chevron_left' : 'chevron_right'), nextBtn.firstChild);
+      bottomBar.appendChild(wrap);
+      if (r) {
+        bottomBar.appendChild(nextBtn);
+        bottomBar.appendChild(prevBtn);
+      } else {
+        bottomBar.appendChild(prevBtn);
+        bottomBar.appendChild(nextBtn);
+      }
+    }
+
+    function setDir(d) {
+      curDir = d;
+      save(dirKey, d);
+      dirSeg.set(d);
+      layoutBottom();
+    }
+
+    function setMode(m) {
+      if (m === curMode) return;
+      var keep = curPage;
+      curMode = m;
+      save(modeKey, m);
+      viewSeg.set(m);
+      dirSeg.setDisabled(null, m === 'vertical');
+      fitSection.hidden = m === 'vertical';
+      curPage = keep;
+      if (m === 'vertical') {
+        enterVertical();
+      } else {
+        leaveVertical();
+        goToPage(keep, false, true);
+      }
+      layoutBottom();
+    }
+
+    // ---- Konum bilgisi ------------------------------------------------------------
+    function updateUi() {
+      var pct = (curPage + 1) / total;
+      var pct100 = Math.round(pct * 100);
+      pageInd.textContent = curPage + 1 + ' / ' + total;
+      progFill.style.width = pct100 + '%';
+      progTrack.setAttribute('aria-valuenow', String(pct100));
+      eta.update(pct);
+      bookmarks.sync();
+      return pct;
+    }
+
+    function record(saveProg) {
+      var pct = updateUi();
+      if (KRS.tracker) {
+        KRS.tracker.addPage(curPage);
+        if (saveProg) {
+          KRS.tracker.scheduleProgress(book.id, String(curPage), pct);
+        }
+      }
+    }
+
     var isRar = book.format === 'rar' || book.format === 'cbr';
     function preloadNeighbors(idx) {
       if (isRar) {
@@ -271,6 +419,7 @@
       }
     }
 
+    // ---- Sayfa modu ----------------------------------------------------------------
     var errBox = null;
     function clearErrBox() {
       if (errBox && errBox.parentNode) {
@@ -280,13 +429,12 @@
       pageImg.style.display = '';
     }
 
-    function goToPage(idx, saveProg) {
+    function goToPage(idx, saveProg, force) {
+      if (curMode !== 'page') return;
       var target = Math.max(0, Math.min(total - 1, idx));
-      if (target === curPage && pageImg.getAttribute('src') && !errBox) return;
+      if (!force && target === curPage && pageImg.getAttribute('src') && !errBox) return;
       clearErrBox();
       curPage = target;
-      var pct = (curPage + 1) / total;
-      var pct100 = Math.round(pct * 100);
 
       pageImg.style.opacity = '0';
       pageImg.onload = function () {
@@ -318,40 +466,229 @@
       stage.scrollTop = 0;
       stage.scrollLeft = 0;
 
-      pageInd.textContent = curPage + 1 + ' / ' + total;
-      progFill.style.width = pct100 + '%';
-      progTrack.setAttribute('aria-valuenow', String(pct100));
-
-      if (KRS.tracker) {
-        KRS.tracker.addPage(curPage);
-        if (saveProg) {
-          KRS.tracker.scheduleProgress(book.id, String(curPage), pct);
-        }
-      }
+      record(saveProg);
+      if (nextVolume) nextVolume.setVisible(curPage === total - 1);
       preloadNeighbors(curPage);
     }
+
+    // ileri (+1) / geri (-1): sağdan sola okumada tuş ve dokunma yönleri tersine çevrilir
+    function step(delta) {
+      if (curMode === 'vertical') {
+        scrollWebtoon(delta);
+        return;
+      }
+      goToPage(curPage + delta, true);
+    }
+
+    // ---- Dikey (webtoon) mod --------------------------------------------------------
+    var observer = null;
+    var holders = [];
+    var loadQueue = [];
+    var loading = 0;
+    var scrollRaf = 0;
+    var restoring = false;
+
+    function maxLoads() {
+      return isRar ? 2 : 6;
+    }
+
+    function pumpLoads() {
+      while (loading < maxLoads() && loadQueue.length > 0) {
+        var h = loadQueue.shift();
+        if (h.img) continue;
+        startLoad(h);
+      }
+    }
+
+    function startLoad(h) {
+      var idx = Number(h.node.getAttribute('data-idx'));
+      var img = el('img', {
+        className: 'webtoon-img',
+        loading: 'lazy',
+        alt: 'Sayfa ' + (idx + 1)
+      });
+      h.img = img;
+      loading++;
+      function done() {
+        loading--;
+        h.node.classList.add('loaded');
+        pumpLoads();
+      }
+      img.addEventListener('load', done, { once: true });
+      img.addEventListener(
+        'error',
+        function () {
+          h.img = null;
+          h.node.removeChild(img);
+          done();
+        },
+        { once: true }
+      );
+      img.src = '/api/books/' + book.id + '/pages/' + idx;
+      h.node.appendChild(img);
+    }
+
+    function requestLoad(idx) {
+      var h = holders[idx];
+      if (!h || h.img || loadQueue.indexOf(h) >= 0) return;
+      loadQueue.push(h);
+      pumpLoads();
+    }
+
+    function visibleIndex() {
+      var top = webtoon.scrollTop + 0.3 * webtoon.clientHeight;
+      for (var i = 0; i < holders.length; i++) {
+        var n = holders[i].node;
+        if (n.offsetTop + n.offsetHeight > top) return i;
+      }
+      return holders.length - 1;
+    }
+
+    function atBottom() {
+      return webtoon.scrollTop + webtoon.clientHeight >= webtoon.scrollHeight - 4;
+    }
+
+    function onWebtoonScroll() {
+      if (scrollRaf) return;
+      scrollRaf = requestAnimationFrame(function () {
+        scrollRaf = 0;
+        if (!webtoon || disposed) return;
+        var idx = visibleIndex();
+        if (idx !== curPage) {
+          curPage = idx;
+          if (!restoring) record(true);
+          else updateUi();
+        }
+        if (nextVolume) nextVolume.setVisible(curPage === total - 1 && atBottom());
+      });
+    }
+
+    function scrollToPage(idx) {
+      if (!webtoon || !holders[idx]) return;
+      holders[idx].node.scrollIntoView({ block: 'start' });
+      for (var d = -2; d <= 2; d++) requestLoad(idx + d);
+      curPage = idx;
+      record(true);
+    }
+
+    function scrollWebtoon(dir) {
+      if (!webtoon) return;
+      webtoon.scrollTop += dir * Math.max(40, Math.floor(webtoon.clientHeight * 0.9));
+    }
+
+    function enterVertical() {
+      clearErrBox();
+      stage.className = 'reader-stage webtoon-mode';
+      if (pageImg.parentNode) stage.removeChild(pageImg);
+      webtoon = el('div', { className: 'webtoon', tabindex: '-1' });
+      holders = [];
+      for (var i = 0; i < total; i++) {
+        var node = el('div', { className: 'webtoon-page', 'data-idx': String(i) });
+        holders.push({ node: node, img: null });
+        webtoon.appendChild(node);
+      }
+      stage.appendChild(webtoon);
+      if ('IntersectionObserver' in window) {
+        observer = new IntersectionObserver(
+          function (entries) {
+            entries.forEach(function (en) {
+              if (en.isIntersecting) requestLoad(Number(en.target.getAttribute('data-idx')));
+            });
+          },
+          { root: webtoon, rootMargin: '200% 0px' }
+        );
+        holders.forEach(function (h) {
+          observer.observe(h.node);
+        });
+      } else {
+        for (var j = 0; j < Math.min(total, 6); j++) requestLoad(j);
+      }
+      webtoon.addEventListener('scroll', onWebtoonScroll, { passive: true });
+      webtoon.addEventListener('click', function (e) {
+        if (e.target.closest && e.target.closest('a,button')) return;
+        toggleBars();
+      });
+      restoring = true;
+      var start = curPage;
+      for (var d = -2; d <= 2; d++) requestLoad(start + d);
+      holders[start].node.scrollIntoView({ block: 'start' });
+      updateUi();
+      setTimeout(function () {
+        restoring = false;
+        record(false);
+      }, 300);
+      if (nextVolume) nextVolume.setVisible(false);
+    }
+
+    function leaveVertical() {
+      if (observer) {
+        observer.disconnect();
+        observer = null;
+      }
+      loadQueue = [];
+      if (webtoon && webtoon.parentNode) webtoon.parentNode.removeChild(webtoon);
+      webtoon = null;
+      holders = [];
+      if (!pageImg.parentNode) stage.appendChild(pageImg);
+      stage.className = 'reader-stage fit-' + curFit;
+    }
+
+    dirSeg.setDisabled(null, curMode === 'vertical');
+    fitSection.hidden = curMode === 'vertical';
+    layoutBottom();
 
     if (KRS.tracker) {
       KRS.tracker.start(book.id, (curPage + 1) / total);
     }
-    goToPage(curPage, false);
+    if (curMode === 'vertical') {
+      enterVertical();
+    } else {
+      goToPage(curPage, false, true);
+    }
     scheduleHideBars();
 
     function onKeyDown(e) {
       showBars();
       if (e.ctrlKey || e.metaKey || e.altKey) return;
-      if (sheet.open) {
+      if (anySheetOpen()) {
         if (e.key === 'Escape') {
           sheet.close();
+          listSheet.dialog.close();
         }
         return;
       }
-      if (e.key === 'ArrowRight' || e.key === 'PageDown') {
+      if (curMode === 'vertical') {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          if (webtoon) webtoon.scrollTop += 60;
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          if (webtoon) webtoon.scrollTop -= 60;
+        } else if (e.key === 'PageDown' || (e.key === ' ' && !e.shiftKey)) {
+          e.preventDefault();
+          scrollWebtoon(1);
+        } else if (e.key === 'PageUp' || (e.key === ' ' && e.shiftKey)) {
+          e.preventDefault();
+          scrollWebtoon(-1);
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          KRS.navigate('#/seri/' + book.series_id);
+        }
+        return;
+      }
+      var left = rtl() ? 1 : -1;
+      if (e.key === 'ArrowRight') {
         e.preventDefault();
-        goToPage(curPage + 1, true);
-      } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+        step(-left);
+      } else if (e.key === 'ArrowLeft') {
         e.preventDefault();
-        goToPage(curPage - 1, true);
+        step(left);
+      } else if (e.key === 'PageDown' || (e.key === ' ' && !e.shiftKey)) {
+        e.preventDefault();
+        step(1);
+      } else if (e.key === 'PageUp' || (e.key === ' ' && e.shiftKey)) {
+        e.preventDefault();
+        step(-1);
       } else if (e.key === 'Home') {
         e.preventDefault();
         goToPage(0, true);
@@ -374,7 +711,7 @@
     var startX = null;
     var startY = null;
     stage.addEventListener('pointerdown', function (e) {
-      if (e.target !== stage && e.target !== pageImg) {
+      if (curMode !== 'page' || (e.target !== stage && e.target !== pageImg)) {
         startX = null;
         startY = null;
         return;
@@ -394,21 +731,19 @@
       startY = null;
       var dx = e.clientX - sx;
       var dy = e.clientY - sy;
+      // sol/sağ yönü: soldan sağa okumada sola kaydırma ileri; sağdan sola okumada tersi
+      var dirSign = rtl() ? -1 : 1;
       if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) {
-        if (dx < 0) {
-          goToPage(curPage + 1, true);
-        } else {
-          goToPage(curPage - 1, true);
-        }
+        step(dx < 0 ? dirSign : -dirSign);
         return;
       }
       if (Math.abs(dx) < 10 && Math.abs(dy) < 10) {
         var rect = stage.getBoundingClientRect();
         var relX = e.clientX - rect.left;
         if (relX < rect.width / 3) {
-          goToPage(curPage - 1, true);
+          step(-dirSign);
         } else if (relX > (rect.width * 2) / 3) {
-          goToPage(curPage + 1, true);
+          step(dirSign);
         } else {
           toggleBars();
         }
@@ -419,12 +754,18 @@
       showBars();
     }
 
+    var releaseAwake = ui.keepAwake();
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('pointermove', onUserMove, { passive: true });
     stage.addEventListener('scroll', onUserMove, { passive: true });
 
     return function cleanup() {
+      disposed = true;
       if (hideTimer) clearTimeout(hideTimer);
+      if (observer) observer.disconnect();
+      if (scrollRaf) cancelAnimationFrame(scrollRaf);
+      releaseAwake();
+      if (fsBtn && fsBtn.cleanup) fsBtn.cleanup();
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('pointermove', onUserMove);
     };

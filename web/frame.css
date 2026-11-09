@@ -2,14 +2,18 @@ html {
   background: var(--bg);
   color: var(--fg);
   font-size: var(--fs, 18px);
-  font-family: var(--font, Georgia, "Noto Serif", "DejaVu Serif", serif);
+  font-family: var(--font, Georgia, "Noto Serif", serif);
 }
 
 body {
   max-width: 38rem;
   margin: 0 auto;
-  padding: 80px 20px 96px;
-  line-height: 1.7;
+  padding: 80px calc(20px + var(--mx, 0px)) 96px;
+  line-height: var(--lh, 1.7);
+  word-spacing: var(--ws, 0em);
+  letter-spacing: var(--ls, 0em);
+  text-align: var(--align, left);
+  hyphens: var(--hyph, manual);
   overflow-wrap: break-word;
 }
 
@@ -24,4 +28,49 @@ a {
 
 h1, h2, h3 {
   line-height: 1.25;
+}
+
+html.paged {
+  height: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  touch-action: pan-x;
+}
+
+html.paged::-webkit-scrollbar {
+  display: none;
+}
+
+html.paged body {
+  box-sizing: content-box;
+  max-width: none;
+  margin: 0;
+  width: calc(var(--pw) - 2 * var(--m));
+  height: calc(var(--ph) - 176px);
+  padding: 80px var(--m) 96px;
+  column-width: calc(var(--pw) - 2 * var(--m));
+  column-gap: calc(2 * var(--m));
+  column-fill: auto;
+}
+
+html.paged img {
+  max-height: var(--bh);
+  width: auto;
+  max-width: 100%;
+  object-fit: contain;
+  break-inside: avoid;
+}
+
+html.paged :is(figure, table, pre, blockquote) {
+  break-inside: avoid;
+}
+
+html.paged :is(h1, h2, h3, h4) {
+  break-after: avoid;
+}
+
+html.paged p {
+  orphans: 2;
+  widows: 2;
 }
