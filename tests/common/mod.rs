@@ -462,7 +462,7 @@ pub async fn body_json(res: axum::response::Response) -> serde_json::Value {
     serde_json::from_slice(&bytes).unwrap()
 }
 
-/// Tek istek: (durum, JSON gövde veya Null). `body` verilirse application/json gönderilir.
+/// Tek istek: (durum, JSON gövde veya Null). GET dışı yöntemler application/json gönderir.
 pub async fn call(
     app: &Router,
     method: &str,
@@ -474,7 +474,7 @@ pub async fn call(
         .method(method)
         .uri(uri)
         .header(header::COOKIE, cookie);
-    if body.is_some() {
+    if method != "GET" {
         b = b.header(header::CONTENT_TYPE, "application/json");
     }
     let body = Body::from(body.unwrap_or("").to_string());
