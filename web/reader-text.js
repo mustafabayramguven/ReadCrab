@@ -52,6 +52,7 @@
     var frameGen = 0;
     var unbinders = [];
     var restoring = false;
+    var deferredScroll = false;
     var lastScrollAt = 0;
     var relayoutTimer = null;
     var snapTimer = null;
@@ -429,7 +430,17 @@
       var gen = frameGen;
       requestAnimationFrame(function () {
         requestAnimationFrame(function () {
-          if (gen === frameGen) restoring = false;
+          if (gen !== frameGen) return;
+          restoring = false;
+          // kilit sırasında gelen kaydırma kaybolmaz: kilit açılınca işlenir
+          if (deferredScroll) {
+            deferredScroll = false;
+            if (isPaged()) {
+              scheduleSnap();
+            } else if (frameReady) {
+              onScrollMode(frameDoc());
+            }
+          }
         });
       });
       // tek sayfa/ekranlık bölümde oran 1 sayılır ve kaydedilir (son bölümse kitap %100)
@@ -617,7 +628,10 @@
         function () {
           lastScrollAt = Date.now();
           showBars();
-          if (restoring) return;
+          if (restoring) {
+            deferredScroll = true;
+            return;
+          }
           if (isPaged()) {
             scheduleSnap();
           } else {
