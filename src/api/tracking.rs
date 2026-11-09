@@ -417,6 +417,7 @@ async fn reading_ping(
 struct HistoryQuery {
     limit: Option<i64>,
     offset: Option<i64>,
+    date: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -446,6 +447,10 @@ async fn get_history(
     State(state): State<AppState>,
     Query(query): Query<HistoryQuery>,
 ) -> Result<Json<HistoryRes>, AppError> {
+    if let Some(d) = &query.date {
+        parse_local_date(d)?;
+    }
+    let date = query.date;
     let limit = query.limit.unwrap_or(50);
     let offset = query.offset.unwrap_or(0);
     if !(1..=200).contains(&limit) || offset < 0 {
@@ -457,8 +462,9 @@ async fn get_history(
         .db
         .run(move |conn| {
             let total: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM reading_sessions WHERE user_id = ?1",
-                rusqlite::params![user_id],
+                "SELECT COUNT(*) FROM reading_sessions
+                 WHERE user_id = ?1 AND (?2 IS NULL OR local_date = ?2)",
+                rusqlite::params![user_id, date],
                 |r| r.get(0),
             )?;
 
@@ -479,13 +485,13 @@ async fn get_history(
                  FROM reading_sessions rs
                  JOIN books b ON b.id = rs.book_id
                  JOIN series s ON s.id = b.series_id
-                 WHERE rs.user_id = ?1
+                 WHERE rs.user_id = ?1 AND (?4 IS NULL OR rs.local_date = ?4)
                  ORDER BY rs.started_at DESC, rs.id DESC
                  LIMIT ?2 OFFSET ?3",
             )?;
 
             let items = stmt
-                .query_map(rusqlite::params![user_id, limit, offset], |r| {
+                .query_map(rusqlite::params![user_id, limit, offset, date], |r| {
                     Ok(HistoryItem {
                         id: r.get(0)?,
                         book_id: r.get(1)?,

@@ -18,6 +18,7 @@ use crate::{
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/stats", get(get_stats))
+        .route("/api/stats/heatmap", get(get_heatmap))
         .route("/api/goal", put(put_goal))
 }
 
@@ -208,6 +209,61 @@ async fn get_stats(
         })
         .await?;
 
+    Ok(Json(res))
+}
+
+#[derive(Deserialize)]
+struct HeatmapQuery {
+    year: Option<String>,
+}
+
+#[derive(Serialize)]
+struct HeatmapRes {
+    year: i32,
+    years: Vec<i32>,
+    days: Vec<DailyStat>,
+}
+
+async fn get_heatmap(
+    user: AuthUser,
+    State(state): State<AppState>,
+    Query(query): Query<HeatmapQuery>,
+) -> Result<Json<HeatmapRes>, AppError> {
+    let year: i32 = query
+        .year
+        .and_then(|y| y.parse().ok())
+        .filter(|y| (2000..=2100).contains(y))
+        .ok_or(AppError::BadRequest("Geçersiz yıl."))?;
+    let user_id = user.id;
+    let res = state
+        .db
+        .run(move |conn| {
+            let (from, to) = (format!("{year:04}-01-01"), format!("{year:04}-12-31"));
+            let mut stmt = conn.prepare(
+                "SELECT local_date, SUM(active_seconds), SUM(pages_read)
+                 FROM reading_sessions
+                 WHERE user_id = ?1 AND local_date >= ?2 AND local_date <= ?3
+                 GROUP BY local_date ORDER BY local_date",
+            )?;
+            let days = stmt
+                .query_map(rusqlite::params![user_id, from, to], |r| {
+                    Ok(DailyStat {
+                        date: r.get(0)?,
+                        seconds: r.get(1)?,
+                        pages: r.get(2)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            let mut stmt = conn.prepare(
+                "SELECT DISTINCT CAST(substr(local_date, 1, 4) AS INTEGER)
+                 FROM reading_sessions WHERE user_id = ?1 ORDER BY 1",
+            )?;
+            let years = stmt
+                .query_map([user_id], |r| r.get(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(HeatmapRes { year, years, days })
+        })
+        .await?;
     Ok(Json(res))
 }
 

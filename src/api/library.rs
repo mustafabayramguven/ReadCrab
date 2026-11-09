@@ -15,6 +15,7 @@ use crate::{app::AppState, auth::AuthUser, error::AppError, formats::natural::na
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/scan-status", get(scan_status))
+        .route("/api/continue", get(continue_reading))
         .route("/api/series", get(list_series))
         .route("/api/series/{id}", get(get_series))
         .route("/api/books/{id}", get(get_book))
@@ -56,6 +57,7 @@ struct SeriesListItem {
     reading_count: i64,
     percent: f64,
     cover_book_id: Option<i64>,
+    cover_v: Option<i64>,
     last_read_at: Option<i64>,
 }
 
@@ -145,11 +147,17 @@ async fn list_series(
                     (
                         SELECT b3.id FROM books b3
                         WHERE b3.series_id = s.id AND b3.missing = 0 AND b3.has_cover = 1
-                        ORDER BY b3.sort_index ASC, b3.id ASC
+                        ORDER BY b3.custom_cover DESC, b3.sort_index ASC, b3.id ASC
                         LIMIT 1
                     ) AS cover_book_id,
                     MAX(p.updated_at) AS last_read_at,
-                    s.added_at
+                    s.added_at,
+                    (
+                        SELECT b3.cover_version FROM books b3
+                        WHERE b3.series_id = s.id AND b3.missing = 0 AND b3.has_cover = 1
+                        ORDER BY b3.custom_cover DESC, b3.sort_index ASC, b3.id ASC
+                        LIMIT 1
+                    ) AS cover_v
                  FROM series s
                  JOIN books b ON b.series_id = s.id AND b.missing = 0
                  LEFT JOIN progress p ON p.book_id = b.id AND p.user_id = ?1
@@ -169,6 +177,7 @@ async fn list_series(
                             reading_count: r.get(4)?,
                             percent: r.get::<_, Option<f64>>(5)?.unwrap_or(0.0),
                             cover_book_id: r.get(6)?,
+                            cover_v: r.get(9)?,
                             last_read_at: r.get(7)?,
                         },
                         added_at: r.get(8)?,
@@ -252,6 +261,7 @@ struct SeriesBookItem {
     error: Option<String>,
     status: String,
     percent: f64,
+    cover_v: i64,
 }
 
 #[derive(Serialize)]
@@ -290,7 +300,8 @@ async fn get_series(
                     b.size,
                     b.error,
                     COALESCE(p.status, 'unread'),
-                    CASE WHEN p.status = 'finished' THEN 1.0 ELSE COALESCE(p.percent, 0.0) END
+                    CASE WHEN p.status = 'finished' THEN 1.0 ELSE COALESCE(p.percent, 0.0) END,
+                    b.cover_version
                  FROM books b
                  LEFT JOIN progress p ON p.book_id = b.id AND p.user_id = ?1
                  WHERE b.series_id = ?2 AND b.missing = 0
@@ -307,6 +318,7 @@ async fn get_series(
                         error: r.get(5)?,
                         status: r.get(6)?,
                         percent: r.get(7)?,
+                        cover_v: r.get(8)?,
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -334,6 +346,11 @@ struct BookDetailRes {
     status: String,
     percent: f64,
     locator: String,
+    cover_version: i64,
+    next_book_id: Option<i64>,
+    next_book_title: Option<String>,
+    prev_book_id: Option<i64>,
+    pace_seconds: Option<i64>,
 }
 
 async fn get_book(
@@ -357,14 +374,16 @@ async fn get_book(
                         b.error,
                         COALESCE(p.status, 'unread'),
                         CASE WHEN p.status = 'finished' THEN 1.0 ELSE COALESCE(p.percent, 0.0) END,
-                        COALESCE(p.locator, '')
+                        COALESCE(p.locator, ''),
+                        b.cover_version,
+                        b.sort_index
                      FROM books b
                      JOIN series s ON s.id = b.series_id
                      LEFT JOIN progress p ON p.book_id = b.id AND p.user_id = ?1
                      WHERE b.id = ?2 AND b.missing = 0",
                     rusqlite::params![user_id, id],
                     |r| {
-                        Ok(BookDetailRes {
+                        Ok((BookDetailRes {
                             id: r.get(0)?,
                             series_id: r.get(1)?,
                             series_name: r.get(2)?,
@@ -375,15 +394,102 @@ async fn get_book(
                             status: r.get(7)?,
                             percent: r.get(8)?,
                             locator: r.get(9)?,
-                        })
+                            cover_version: r.get(10)?,
+                            next_book_id: None,
+                            next_book_title: None,
+                            prev_book_id: None,
+                            pace_seconds: None,
+                        }, r.get::<_, i64>(11)?))
                     },
                 )
                 .optional()?;
-            row.ok_or(AppError::NotFound)
+            let Some((mut book, sort_index)) = row else {
+                return Err(AppError::NotFound);
+            };
+            let neighbor = |cmp: &str, dir: &str| -> rusqlite::Result<Option<(i64, String)>> {
+                conn.query_row(
+                    &format!(
+                        "SELECT id, title FROM books
+                         WHERE series_id = ?1 AND missing = 0 AND error IS NULL
+                           AND (sort_index {cmp} ?2 OR (sort_index = ?2 AND id {cmp} ?3))
+                         ORDER BY sort_index {dir}, id {dir} LIMIT 1"
+                    ),
+                    rusqlite::params![book.series_id, sort_index, id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()
+            };
+            if let Some((nid, title)) = neighbor(">", "ASC")? {
+                book.next_book_id = Some(nid);
+                book.next_book_title = Some(title);
+            }
+            book.prev_book_id = neighbor("<", "DESC")?.map(|(pid, _)| pid);
+            let (sa, sd): (Option<i64>, Option<f64>) = conn.query_row(
+                "SELECT SUM(active_seconds), SUM(end_percent - start_percent)
+                 FROM reading_sessions
+                 WHERE user_id = ?1 AND book_id = ?2
+                   AND end_percent > start_percent AND active_seconds >= 30",
+                rusqlite::params![user_id, id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            // shortcut: ileri sarma ve geri okuma ortalamayı bozar, gerekirse son N oturum
+            if let (Some(sa), Some(sd)) = (sa, sd) {
+                if sa >= 300 && sd >= 0.02 {
+                    book.pace_seconds = Some((sa as f64 / sd).round() as i64);
+                }
+            }
+            Ok(book)
         })
         .await?;
 
     Ok(Json(book))
+}
+
+#[derive(Serialize)]
+struct ContinueItem {
+    book_id: i64,
+    title: String,
+    series_id: i64,
+    series_name: String,
+    format: String,
+    percent: f64,
+    cover_v: i64,
+}
+
+async fn continue_reading(
+    user: AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let user_id = user.id;
+    let items = state
+        .db
+        .run(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT b.id, b.title, b.series_id, s.name, b.format, p.percent, b.cover_version
+                 FROM progress p
+                 JOIN books b ON b.id = p.book_id
+                 JOIN series s ON s.id = b.series_id
+                 WHERE p.user_id = ?1 AND p.status = 'reading' AND b.missing = 0 AND b.error IS NULL
+                 ORDER BY p.updated_at DESC, b.id DESC
+                 LIMIT 20",
+            )?;
+            let rows = stmt
+                .query_map([user_id], |r| {
+                    Ok(ContinueItem {
+                        book_id: r.get(0)?,
+                        title: r.get(1)?,
+                        series_id: r.get(2)?,
+                        series_name: r.get(3)?,
+                        format: r.get(4)?,
+                        percent: r.get(5)?,
+                        cover_v: r.get(6)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .await?;
+    Ok(Json(serde_json::json!({ "items": items })))
 }
 
 async fn get_book_cover(

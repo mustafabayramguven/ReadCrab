@@ -461,3 +461,82 @@ pub async fn body_json(res: axum::response::Response) -> serde_json::Value {
     let bytes = res.into_body().collect().await.unwrap().to_bytes();
     serde_json::from_slice(&bytes).unwrap()
 }
+
+/// Tek istek: (durum, JSON gövde veya Null). `body` verilirse application/json gönderilir.
+pub async fn call(
+    app: &Router,
+    method: &str,
+    uri: &str,
+    cookie: &str,
+    body: Option<&str>,
+) -> (StatusCode, serde_json::Value) {
+    let mut b = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::COOKIE, cookie);
+    if body.is_some() {
+        b = b.header(header::CONTENT_TYPE, "application/json");
+    }
+    let res = app
+        .clone()
+        .oneshot(b.body(Body::from(body.unwrap_or("").to_string())).unwrap())
+        .await
+        .unwrap();
+    let status = res.status();
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&bytes).unwrap_or_default())
+}
+
+/// Yönetici adına kullanıcı açar ve oturum çerezini döner.
+pub async fn create_user_cookie(app: &Router, admin_cookie: &str, username: &str) -> String {
+    let creds = format!(r#"{{"username":"{username}","password":"password1234"}}"#);
+    let (st, _) = call(app, "POST", "/api/admin/users", admin_cookie, Some(&creds)).await;
+    assert_eq!(st, StatusCode::CREATED);
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/login")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(creds))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let c = res.headers().get(header::SET_COOKIE).unwrap();
+    c.to_str().unwrap().split(';').next().unwrap().to_string()
+}
+
+pub async fn user_id(dirs: &TempDirs, username: &str) -> i64 {
+    let u = username.to_string();
+    dirs.db
+        .run(move |c| {
+            Ok(c.query_row("SELECT id FROM users WHERE username = ?1", [u], |r| {
+                r.get(0)
+            })?)
+        })
+        .await
+        .unwrap()
+}
+
+/// Seri (rel_path = ad) ve içine `n` kitap ekler; kitap id'lerini sort_index sırasıyla döner.
+pub async fn seed_books(dirs: &TempDirs, series: &str, n: usize) -> Vec<i64> {
+    let series = series.to_string();
+    dirs.db
+        .run(move |c| {
+            c.execute(
+                "INSERT INTO series(rel_path,name,added_at) VALUES(?1,?1,1)",
+                [&series],
+            )?;
+            let sid = c.last_insert_rowid();
+            let mut ids = Vec::new();
+            for i in 1..=n {
+                c.execute(
+                    "INSERT INTO books(series_id,rel_path,title,format,size,mtime,content_id,sort_index,added_at)
+                     VALUES(?1,?2,?3,'cbz',1,1,?2,?4,1)",
+                    rusqlite::params![sid, format!("{series}/{i}.cbz"), format!("Cilt {i}"), i as i64],
+                )?;
+                ids.push(c.last_insert_rowid());
+            }
+            Ok(ids)
+        })
+        .await
+        .unwrap()
+}
