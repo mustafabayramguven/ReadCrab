@@ -48,6 +48,12 @@
     };
   }
 
+  function handleUnauthorized() {
+    pendingProgress = null;
+    stop();
+    if (location.hash !== '#/giris' && KRS.navigate) KRS.navigate('#/giris');
+  }
+
   function sendPingFetch(s, keepalive) {
     if (!s) return;
     var body = buildPingBody(s);
@@ -59,9 +65,7 @@
       body: JSON.stringify(body)
     })
       .then(function (res) {
-        if (res && res.status === 401 && KRS.navigate) {
-          KRS.navigate('#/giris');
-        }
+        if (res && res.status === 401) handleUnauthorized();
       })
       .catch(function () {});
   }
@@ -96,12 +100,12 @@
       })
     })
       .then(function (res) {
-        if (res && res.ok) {
-          if (pendingProgress === p) {
-            pendingProgress = null;
-          }
-        } else if (res && res.status === 401 && KRS.navigate) {
-          KRS.navigate('#/giris');
+        if (!res) return;
+        if (res.status === 401) {
+          handleUnauthorized();
+        } else if (res.ok || (res.status >= 400 && res.status < 500 && res.status !== 429)) {
+          // kalıcı hata yeniden denenmez; ağ hatası, 429 ve 5xx korunur
+          if (pendingProgress === p) pendingProgress = null;
         }
       })
       .catch(function () {});
@@ -211,6 +215,8 @@
   function stop() {
     clearTimers();
     flushProgress(true);
+    // bekleyen veri başka kitaba ya da yeniden girişten sonraya taşınmaz
+    pendingProgress = null;
     if (session) {
       var s = session;
       session = null;

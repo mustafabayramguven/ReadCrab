@@ -99,6 +99,7 @@ async fn main() {
         }
     });
 
+    std::sync::LazyLock::force(&kavita_rs::auth::DUMMY_HASH);
     start_scan(state.clone());
 
     let app = build_app(state);

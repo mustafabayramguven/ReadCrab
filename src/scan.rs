@@ -500,8 +500,13 @@ fn walk_dir_rec(
             }
         };
         let path = entry.path();
-        let Ok(ft) = entry.file_type() else {
-            continue;
+        let ft = match entry.file_type() {
+            Ok(ft) => ft,
+            Err(err) => {
+                tracing::error!("dosya türü okunamadı ({:?}): {err}", path);
+                *read_dir_errors += 1;
+                continue;
+            }
         };
         if ft.is_symlink() {
             continue;

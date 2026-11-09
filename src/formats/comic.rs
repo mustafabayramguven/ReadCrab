@@ -19,7 +19,15 @@ const BSDTAR_TIMEOUT: Duration = Duration::from_secs(30);
 
 static BSDTAR_SEM: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(2));
 
-type PageListCache = Mutex<Option<(PathBuf, i64, Arc<Vec<String>>)>>;
+pub type FileStamp = (std::time::SystemTime, u64);
+
+/// Önbellek anahtarı: dosyanın o anki gerçek (mtime, boyut) değeri.
+pub fn file_stamp(path: &Path) -> std::io::Result<FileStamp> {
+    let m = std::fs::metadata(path)?;
+    Ok((m.modified()?, m.len()))
+}
+
+type PageListCache = Mutex<Option<(PathBuf, FileStamp, Arc<Vec<String>>)>>;
 static PAGE_LIST_CACHE: LazyLock<PageListCache> = LazyLock::new(|| Mutex::new(None));
 
 pub fn glob_escape(name: &str) -> String {
@@ -163,20 +171,20 @@ pub async fn comic_pages(path: &Path, fmt: Format) -> Result<Vec<String>, Format
 pub async fn comic_pages_cached(
     path: &Path,
     fmt: Format,
-    mtime: i64,
 ) -> Result<Arc<Vec<String>>, FormatError> {
-    if let Some((cached_path, cached_mtime, pages)) = PAGE_LIST_CACHE
+    let stamp = file_stamp(path)?;
+    if let Some((cached_path, cached_stamp, pages)) = PAGE_LIST_CACHE
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .as_ref()
     {
-        if cached_path == path && *cached_mtime == mtime {
+        if cached_path == path && *cached_stamp == stamp {
             return Ok(pages.clone());
         }
     }
     let pages = Arc::new(comic_pages(path, fmt).await?);
     *PAGE_LIST_CACHE.lock().unwrap_or_else(|e| e.into_inner()) =
-        Some((path.to_path_buf(), mtime, pages.clone()));
+        Some((path.to_path_buf(), stamp, pages.clone()));
     Ok(pages)
 }
 

@@ -291,9 +291,7 @@
   }
 
   function navigate(hash) {
-    if (location.hash === hash) {
-      handleRoute();
-    } else {
+    if (location.hash !== hash) {
       location.hash = hash;
     }
   }
@@ -1830,6 +1828,7 @@
   KRS.toast = toast;
   KRS.confirm = confirmDialog;
   KRS.navigate = navigate;
+  KRS.setCleanup = setCleanup;
   KRS.todayLocal = todayLocal;
   KRS.icon = icon;
   KRS.el = el;

@@ -767,7 +767,7 @@ async fn scan_unreadable_root_keeps_books() {
     std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o000)).unwrap();
 
     if std::fs::read_dir(root).is_ok() {
-        // root kullanıcısı olarak çalışıyorsa chmod 000 okumayı engellemez; alt dizini test et veya izinleri geri yükle
+        eprintln!("root: test atlandı");
         std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o755)).unwrap();
         return;
     }

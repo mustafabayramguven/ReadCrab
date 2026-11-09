@@ -131,7 +131,7 @@ async fn login(
     State(state): State<AppState>,
     JsonBody(req): JsonBody<CredentialsReq>,
 ) -> Result<Response, AppError> {
-    if req.username.len() > 32 || req.password.len() > 128 || req.password.chars().count() > 128 {
+    if req.username.chars().count() > 32 || req.password.chars().count() > 128 {
         return Err(AppError::Unauthorized);
     }
 

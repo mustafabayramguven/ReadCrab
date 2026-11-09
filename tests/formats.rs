@@ -10,7 +10,9 @@ use common::{
 use kavita_rs::{
     error::AppError,
     formats::{
-        comic::{bsdtar_list, bsdtar_read, bsdtar_run, comic_pages, comic_read, glob_escape},
+        comic::{bsdtar_list, bsdtar_read, bsdtar_run, comic_pages, comic_pages_cached, comic_read,
+            glob_escape,
+        },
         epub::{epub_asset, epub_chapter_html, epub_open, normalize_zip_path},
         mobi::mobi_open,
         sanitize::{sanitize_chapter, svg_image_to_img, SrcMode, FRAME_CSP},
@@ -84,6 +86,31 @@ async fn cbz_corrupt_returns_422() {
 fn rar_glob_escape_unit() {
     assert_eq!(glob_escape("a[1]*?.png"), r"a\[1\]\*\?.png");
     assert_eq!(glob_escape(r"x\y.png"), r"x\\y.png");
+}
+
+#[tokio::test]
+async fn comic_pages_cache_detects_file_change() {
+    let tmp = tempfile::tempdir().unwrap();
+    let img = png(4, 4, [10, 20, 30]);
+    let cbr = make_tar_as_cbr(tmp.path(), "c.cbr", &[("p1.png", img.clone())]);
+    let first = comic_pages_cached(&cbr, Format::Cbr).await.unwrap();
+    assert_eq!(first.len(), 1);
+
+    let old = std::fs::metadata(&cbr).unwrap().modified().unwrap();
+    std::fs::remove_file(&cbr).unwrap();
+    let cbr = make_tar_as_cbr(
+        tmp.path(),
+        "c.cbr",
+        &[("p1.png", img.clone()), ("p2.png", img)],
+    );
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&cbr)
+        .unwrap()
+        .set_modified(old + Duration::from_secs(5))
+        .unwrap();
+    let second = comic_pages_cached(&cbr, Format::Cbr).await.unwrap();
+    assert_eq!(second.len(), 2);
 }
 
 #[tokio::test]

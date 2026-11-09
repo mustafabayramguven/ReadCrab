@@ -19,7 +19,7 @@ use crate::{
     auth::AuthUser,
     error::AppError,
     formats::{
-        comic::{comic_pages_cached, comic_read},
+        comic::{comic_pages_cached, comic_read, file_stamp},
         epub::{epub_asset, epub_chapter_html, epub_open},
         mobi::{mobi_open, MobiBook},
         sanitize::{frame_document, sanitize_chapter, SrcMode, FRAME_CSP},
@@ -32,18 +32,18 @@ use crate::{
 fn open_mobi_cached(
     cache: &MobiCache,
     path: &Path,
-    mtime: i64,
 ) -> Result<Arc<MobiBook>, FormatError> {
-    if let Some((cached_path, cached_mtime, book)) =
+    let stamp = file_stamp(path)?;
+    if let Some((cached_path, cached_stamp, book)) =
         cache.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
     {
-        if cached_path == path && *cached_mtime == mtime {
+        if cached_path == path && *cached_stamp == stamp {
             return Ok(book.clone());
         }
     }
     let book = Arc::new(mobi_open(path)?);
     *cache.lock().unwrap_or_else(|e| e.into_inner()) =
-        Some((path.to_path_buf(), mtime, book.clone()));
+        Some((path.to_path_buf(), stamp, book.clone()));
     Ok(book)
 }
 
@@ -61,17 +61,16 @@ struct BookMeta {
     format: Format,
     title: String,
     page_count: i64,
-    mtime: i64,
 }
 
-type BookRow = (String, String, String, i64, Option<String>, i64, i64);
+type BookRow = (String, String, String, i64, Option<String>, i64);
 
 async fn load_book_meta(state: &AppState, id: i64) -> Result<BookMeta, AppError> {
     let row: Option<BookRow> = state
         .db
         .run(move |conn| {
             conn.query_row(
-                "SELECT rel_path, format, title, page_count, error, missing, mtime
+                "SELECT rel_path, format, title, page_count, error, missing
                  FROM books WHERE id = ?1",
                 rusqlite::params![id],
                 |r| {
@@ -82,7 +81,6 @@ async fn load_book_meta(state: &AppState, id: i64) -> Result<BookMeta, AppError>
                         r.get(3)?,
                         r.get(4)?,
                         r.get(5)?,
-                        r.get(6)?,
                     ))
                 },
             )
@@ -91,7 +89,7 @@ async fn load_book_meta(state: &AppState, id: i64) -> Result<BookMeta, AppError>
         })
         .await?;
 
-    let Some((rel_path, fmt_str, title, page_count, error, missing, mtime)) = row else {
+    let Some((rel_path, fmt_str, title, page_count, error, missing)) = row else {
         return Err(AppError::NotFound);
     };
     if missing != 0 {
@@ -111,7 +109,6 @@ async fn load_book_meta(state: &AppState, id: i64) -> Result<BookMeta, AppError>
         format,
         title,
         page_count,
-        mtime,
     })
 }
 
@@ -162,7 +159,7 @@ async fn get_page(
         ));
     }
 
-    let pages = comic_pages_cached(&meta.full_path, meta.format, meta.mtime).await?;
+    let pages = comic_pages_cached(&meta.full_path, meta.format).await?;
     let Some(member) = pages.get(n) else {
         return Err(AppError::NotFound);
     };
@@ -212,7 +209,6 @@ async fn get_toc(
 
     let full_path = meta.full_path;
     let format = meta.format;
-    let mtime = meta.mtime;
     let mobi_cache = state.mobi_cache.clone();
     let chapters = tokio::task::spawn_blocking(move || -> Result<Vec<TocChapter>, FormatError> {
         match format {
@@ -225,7 +221,7 @@ async fn get_toc(
                     .collect())
             }
             Format::Mobi => {
-                let book = open_mobi_cached(&mobi_cache, &full_path, mtime)?;
+                let book = open_mobi_cached(&mobi_cache, &full_path)?;
                 Ok((0..book.chapters.len())
                     .map(|i| TocChapter {
                         index: i,
@@ -257,7 +253,6 @@ async fn get_chapter(
     let full_path = meta.full_path;
     let format = meta.format;
     let book_title = meta.title;
-    let mtime = meta.mtime;
     let mobi_cache = state.mobi_cache.clone();
 
     let doc_opt = tokio::task::spawn_blocking(move || -> Result<Option<String>, FormatError> {
@@ -276,7 +271,7 @@ async fn get_chapter(
                 Ok(Some(frame_document(&body, &book_title)))
             }
             Format::Mobi => {
-                let book = open_mobi_cached(&mobi_cache, &full_path, mtime)?;
+                let book = open_mobi_cached(&mobi_cache, &full_path)?;
                 let Some(raw) = book.chapters.get(n) else {
                     return Ok(None);
                 };
@@ -348,7 +343,6 @@ async fn get_asset(
 
     let full_path = meta.full_path;
     let format = meta.format;
-    let mtime = meta.mtime;
     let mobi_cache = state.mobi_cache.clone();
 
     let asset_opt =
@@ -369,7 +363,7 @@ async fn get_asset(
                     if idx1 == 0 {
                         return Ok(None);
                     }
-                    let book = open_mobi_cached(&mobi_cache, &full_path, mtime)?;
+                    let book = open_mobi_cached(&mobi_cache, &full_path)?;
                     let Some(bytes) = book.images.get(idx1 - 1).cloned() else {
                         return Ok(None);
                     };

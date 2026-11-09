@@ -520,7 +520,10 @@
               for (var c = 0; c < cleanups.length; c++) {
                 cleanups[c]();
               }
-              renderStats(mount, myGen);
+              var nextCleanup = await renderStats(mount, myGen);
+              if (myGen === KRS.routeGen && typeof nextCleanup === 'function') {
+                KRS.setCleanup(nextCleanup);
+              }
             } catch (err) {
               KRS.toast(err.message);
             }

@@ -489,3 +489,32 @@ test('görünüm ve erişilebilirlik', async ({ browser }) => {
     }
   }
 });
+
+test('oturum düşünce 401 döngüsü yok', async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  let setupStatusCalls = 0;
+  page.on('request', (req) => {
+    if (req.url().includes('/api/setup-status')) setupStatusCalls++;
+  });
+
+  const loginRes = await context.request.post('/api/login', {
+    data: { username: 'e2e', password: 'e2e-pass-123' },
+    headers: { 'Content-Type': 'application/json' }
+  });
+  expect(loginRes.ok()).toBeTruthy();
+
+  await page.goto(`/#/oku/${sharedCbzId}`);
+  await expect(page.locator('#page-indicator')).toBeVisible();
+
+  await context.clearCookies();
+  setupStatusCalls = 0;
+  await page.keyboard.press('ArrowRight');
+
+  await expect(page).toHaveURL(/#\/giris$/);
+  await expect(page.locator('#login-username')).toBeVisible();
+  await page.waitForTimeout(3000);
+  expect(setupStatusCalls).toBeLessThanOrEqual(2);
+  await expect(page.locator('#login-username')).toBeVisible();
+  await context.close();
+});

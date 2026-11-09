@@ -39,7 +39,7 @@ const ICONS_SVG: &str = include_str!("../web/icons.svg");
 const FONT_LATIN: &[u8] = include_bytes!("../web/fonts/roboto-flex-latin.woff2");
 const FONT_LATIN_EXT: &[u8] = include_bytes!("../web/fonts/roboto-flex-latin-ext.woff2");
 
-pub type MobiCache = Mutex<Option<(PathBuf, i64, Arc<MobiBook>)>>;
+pub type MobiCache = Mutex<Option<(PathBuf, crate::formats::comic::FileStamp, Arc<MobiBook>)>>;
 
 #[derive(Clone)]
 pub struct AppState {
