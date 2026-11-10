@@ -142,9 +142,7 @@ pub fn strip_tags_until(html: &str, deadline: Option<Instant>) -> Option<String>
             .collect::<String>()
             .to_ascii_lowercase();
         // `<title/>` kapanış etiketi aramaz, yoksa metnin kalanı atlanır
-        if !closing
-            && !tag.ends_with('/')
-            && matches!(name.as_str(), "script" | "style" | "title")
+        if !closing && !tag.ends_with('/') && matches!(name.as_str(), "script" | "style" | "title")
         {
             rest = find_ci(rest, &format!("</{name}"))
                 .and_then(|j| rest[j..].find('>').map(|k| &rest[j + k + 1..]))

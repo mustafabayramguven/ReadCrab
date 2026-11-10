@@ -185,8 +185,7 @@ async fn process_single_book(state: &AppState, disc: &DiscoveredFile, covers_dir
                 )
                 .optional()?;
 
-            if let Some((book_id, old_series_id, size, mtime, missing, sort_idx, error)) =
-                existing
+            if let Some((book_id, old_series_id, size, mtime, missing, sort_idx, error)) = existing
             {
                 // hatalı kayıt geçici nedenle olabilir (zaman aşımı), yeniden denenir
                 if size == disc_size && mtime == disc_mtime && missing == 0 && error.is_none() {
