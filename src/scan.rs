@@ -166,6 +166,7 @@ async fn process_single_book(state: &AppState, disc: &DiscoveredFile, covers_dir
                 |r| r.get(0),
             )?;
 
+            #[allow(clippy::type_complexity)] // tek kullanımlık satır tuple'ı
             let existing: Option<(i64, i64, i64, i64, i64, i64, Option<String>)> = conn
                 .query_row(
                     "SELECT id, series_id, size, mtime, missing, sort_index, error
