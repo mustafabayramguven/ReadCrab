@@ -181,7 +181,7 @@ async fn status_rules() {
     let cookie = login_as_admin(&app).await;
     let (cbz_id, _) = setup_two_books(&dirs).await;
 
-    // Rule 3: unread -> reading when percent < 0.99
+    // Rule 3: unread -> reading when percent < 0.9999
     let r1 = app
         .clone()
         .oneshot(
@@ -199,7 +199,25 @@ async fn status_rules() {
         .unwrap();
     assert_eq!(body_json(r1).await["status"], "reading");
 
-    // Rule 1: percent >= 0.99 -> finished, sets finished_date
+    // 0.995 is not the end yet: stays reading
+    let r_almost = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/api/books/{cbz_id}/progress"))
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"locator":"1","percent":0.995,"local_date":"2026-10-01"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(body_json(r_almost).await["status"], "reading");
+
+    // Rule 1: percent >= 0.9999 -> finished, sets finished_date
     let r2 = app
         .clone()
         .oneshot(
@@ -209,7 +227,7 @@ async fn status_rules() {
                 .header(header::COOKIE, &cookie)
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(
-                    r#"{"locator":"1","percent":0.995,"local_date":"2026-10-02"}"#,
+                    r#"{"locator":"1","percent":1.0,"local_date":"2026-10-02"}"#,
                 ))
                 .unwrap(),
         )
@@ -217,7 +235,7 @@ async fn status_rules() {
         .unwrap();
     assert_eq!(body_json(r2).await["status"], "finished");
 
-    // Rule 2: re-reading (percent < 0.99) when already finished keeps finished and original finished_date
+    // Rule 2: re-reading (percent < 0.9999) when already finished keeps finished and original finished_date
     let r3 = app
         .clone()
         .oneshot(

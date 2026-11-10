@@ -141,7 +141,11 @@ pub fn strip_tags_until(html: &str, deadline: Option<Instant>) -> Option<String>
             .take_while(char::is_ascii_alphanumeric)
             .collect::<String>()
             .to_ascii_lowercase();
-        if !closing && matches!(name.as_str(), "script" | "style" | "title") {
+        // `<title/>` kapanış etiketi aramaz, yoksa metnin kalanı atlanır
+        if !closing
+            && !tag.ends_with('/')
+            && matches!(name.as_str(), "script" | "style" | "title")
+        {
             rest = find_ci(rest, &format!("</{name}"))
                 .and_then(|j| rest[j..].find('>').map(|k| &rest[j + k + 1..]))
                 .unwrap_or("");
@@ -243,6 +247,11 @@ mod tests {
             <body><p>şeker&amp;<b>tuz</b></p><script>x()</script><div>a&nbsp;&#65;&#x42;</div>\
             <!-- yorum --><br/>son &bilinmez; &lt;</body></html>";
         assert_eq!(strip_tags(html), "şeker&tuz a AB son &bilinmez; <");
+    }
+
+    #[test]
+    fn self_closing_title_does_not_drop_rest() {
+        assert_eq!(strip_tags("<title/><p>merhaba</p>"), "merhaba");
     }
 
     #[test]

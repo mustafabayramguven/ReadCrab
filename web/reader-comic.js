@@ -505,7 +505,6 @@
       var idx = Number(h.node.getAttribute('data-idx'));
       var img = el('img', {
         className: 'webtoon-img',
-        loading: 'lazy',
         alt: 'Sayfa ' + (idx + 1)
       });
       h.img = img;
@@ -587,7 +586,9 @@
     function scrollToPage(idx) {
       if (!webtoon || !holders[idx]) return;
       holders[idx].node.scrollIntoView({ block: 'start' });
-      for (var d = -2; d <= 2; d++) requestLoad(idx + d);
+      requestLoad(idx);
+      for (var d = 1; d <= 2; d++) requestLoad(idx + d);
+      for (var b = 1; b <= 2; b++) requestLoad(idx - b);
       curPage = idx;
       record(true);
     }
@@ -636,7 +637,9 @@
       });
       restoring = true;
       var start = curPage;
-      for (var d = -2; d <= 2; d++) requestLoad(start + d);
+      requestLoad(start);
+      for (var d = 1; d <= 2; d++) requestLoad(start + d);
+      for (var b = 1; b <= 2; b++) requestLoad(start - b);
       holders[start].node.scrollIntoView({ block: 'start' });
       updateUi();
       restoreTimer = setTimeout(function () {
@@ -688,6 +691,15 @@
           sheet.close();
           listSheet.dialog.close();
         }
+        return;
+      }
+      // odaklı kontrol (düğme, bağlantı, alan) Boşluk/Enter'ı kendisi işler
+      if (
+        (e.key === ' ' || e.key === 'Enter') &&
+        e.target &&
+        e.target.closest &&
+        e.target.closest('button, a, input, select, textarea, [role="radio"], [role="tab"]')
+      ) {
         return;
       }
       if (curMode === 'vertical') {

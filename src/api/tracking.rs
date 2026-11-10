@@ -13,6 +13,9 @@ use crate::{
     error::{AppError, JsonBody},
 };
 
+// 0.99 değil: istemci sonda tam 1.0 yollar, yoksa 300 sayfalık kitap 3 sayfa erken biter
+const FINISHED_PERCENT: f64 = 0.9999;
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route(
@@ -176,7 +179,7 @@ async fn put_progress(
                 )
                 .optional()?;
 
-            let (new_status, new_finished_date) = if percent >= 0.99 {
+            let (new_status, new_finished_date) = if percent >= FINISHED_PERCENT {
                 let fin_date = match prev {
                     Some((ref st, Some(ref d))) if st == "finished" => Some(d.clone()),
                     _ => Some(local_date),

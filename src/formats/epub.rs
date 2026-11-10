@@ -1,7 +1,7 @@
 use std::{collections::HashMap, fs::File, io::Read, path::Path};
 
 use percent_encoding::percent_decode_str;
-use quick_xml::{events::Event, Reader};
+use quick_xml::{escape::resolve_predefined_entity, events::Event, Reader};
 use zip::ZipArchive;
 
 use crate::formats::{FormatError, MAX_CHAPTER_BYTES, MAX_ENTRIES, MAX_TOTAL_BYTES, MAX_XML_BYTES};
@@ -210,7 +210,16 @@ fn read_zip_string(
     max_bytes: u64,
 ) -> Result<String, FormatError> {
     let bytes = read_zip_bytes(archive, name, max_bytes)?;
-    String::from_utf8(bytes).map_err(|_| FormatError::Corrupt)
+    // shortcut: UTF-8 dışı metin � görünür, gerçek çözme encoding_rs ister; Latin-5 çok olursa ekle
+    let text = match String::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
+    };
+    // BOM quick-xml'i bozmasın
+    Ok(match text.strip_prefix('\u{feff}') {
+        Some(rest) => rest.to_string(),
+        None => text,
+    })
 }
 
 fn read_zip_string_opt(
@@ -227,6 +236,11 @@ fn read_zip_string_opt(
     read_zip_string(archive, name, max_bytes).map(Some)
 }
 
+// bilinmeyen varlıklar (&nbsp; gibi) hata vermesin, boş olsun; &amp; vb. önce çözülmeli
+fn resolve_entity(name: &str) -> Option<&'static str> {
+    resolve_predefined_entity(name).or(Some(""))
+}
+
 fn local_name(raw: &[u8]) -> &[u8] {
     match raw.iter().rposition(|&b| b == b':') {
         Some(idx) => &raw[idx + 1..],
@@ -238,7 +252,7 @@ fn attr_value(e: &quick_xml::events::BytesStart<'_>, key_local: &[u8]) -> Option
     for attr in e.attributes().flatten() {
         if local_name(attr.key.as_ref()).eq_ignore_ascii_case(key_local) {
             if let Ok(raw) = std::str::from_utf8(attr.value.as_ref()) {
-                if let Ok(val) = quick_xml::escape::unescape_with(raw, |_| Some("")) {
+                if let Ok(val) = quick_xml::escape::unescape_with(raw, resolve_entity) {
                     return Some(val.into_owned());
                 }
             }
@@ -353,7 +367,7 @@ fn parse_opf_xml(xml: &str, opf_dir: &str) -> Result<ParsedOpf, FormatError> {
                 }
             }
             Ok(Event::Text(ref e)) if in_title => {
-                if let Ok(txt) = e.unescape_with(|_| Some("")) {
+                if let Ok(txt) = e.unescape_with(resolve_entity) {
                     title_buf.push_str(&txt);
                 }
             }
@@ -487,7 +501,7 @@ fn parse_nav_toc(xml: &str, nav_dir: &str, spine: &[String]) -> Vec<(String, usi
                 }
             }
             Ok(Event::Text(ref e)) if current_href.is_some() => {
-                if let Ok(t) = e.unescape_with(|_| Some("")) {
+                if let Ok(t) = e.unescape_with(resolve_entity) {
                     current_text.push_str(&t);
                 }
             }
@@ -574,7 +588,7 @@ fn parse_ncx_toc(xml: &str, ncx_dir: &str, spine: &[String]) -> Vec<(String, usi
                 }
             }
             Ok(Event::Text(ref e)) if in_text => {
-                if let Ok(t) = e.unescape_with(|_| Some("")) {
+                if let Ok(t) = e.unescape_with(resolve_entity) {
                     last_label.push_str(&t);
                 }
             }
@@ -589,4 +603,22 @@ fn parse_ncx_toc(xml: &str, ncx_dir: &str, spine: &[String]) -> Vec<(String, usi
         buf.clear();
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn opf_resolves_predefined_entities() {
+        let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <metadata><dc:title>Tom &amp; Jerry &nbsp;x</dc:title></metadata>
+  <manifest><item id="c1" href="a&amp;b.xhtml" media-type="application/xhtml+xml"/></manifest>
+  <spine><itemref idref="c1"/></spine>
+</package>"#;
+        let parsed = parse_opf_xml(opf, "OEBPS").unwrap();
+        assert!(parsed.title.unwrap().contains("Tom & Jerry"));
+        assert_eq!(parsed.spine, vec!["OEBPS/a&b.xhtml".to_string()]);
+    }
 }

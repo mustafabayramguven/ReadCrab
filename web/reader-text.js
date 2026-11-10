@@ -447,7 +447,7 @@
       var single = isPaged()
         ? pageTotal <= 1
         : se
-          ? se.scrollHeight - se.clientHeight <= 1
+          ? se.scrollHeight - se.clientHeight <= 2
           : false;
       var promoted = single && curRatio < 1;
       if (promoted) curRatio = 1;
@@ -524,6 +524,8 @@
       if (!se) return;
       var maxScroll = Math.max(0, se.scrollHeight - se.clientHeight);
       var ratio = maxScroll > 0 ? clamp01(se.scrollTop / maxScroll) : 0;
+      // kesirli kaydırma/yakınlaştırmada 0.997'de kalmasın: alt uca varınca tam 1
+      if (se.scrollTop + se.clientHeight >= se.scrollHeight - 2) ratio = 1;
       curRatio = ratio;
       var overall = updateProgressUi();
       var screenIdx = Math.floor(se.scrollTop / Math.max(1, se.clientHeight));
@@ -747,6 +749,15 @@
       }
       if (settings.dialog.open) {
         if (e.key === 'Escape') settings.dialog.close();
+        return;
+      }
+      // odaklı kontrol (düğme, bağlantı, alan) Boşluk/Enter'ı kendisi işler
+      if (
+        (e.key === ' ' || e.key === 'Enter') &&
+        e.target &&
+        e.target.closest &&
+        e.target.closest('button, a, input, select, textarea, [role="radio"], [role="tab"]')
+      ) {
         return;
       }
       var doc = frameDoc();

@@ -156,8 +156,42 @@ fn rewrite_mobi_recindex(html: &str) -> String {
     out
 }
 
+const RAW_TEXT_TAGS: [&str; 9] = [
+    "title", "script", "style", "textarea", "iframe", "noscript", "xmp", "noembed", "noframes",
+];
+
+// HTML5 ayrıştırıcı `<title/>` sonundaki '/' işaretini yok sayar, belgenin kalanını yutar
+fn strip_self_closing_raw_text(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut rest = html;
+    while let Some(pos) = rest.find('<') {
+        out.push_str(&rest[..pos]);
+        let after = &rest[pos..];
+        let Some(end) = after.find('>') else {
+            out.push_str(after);
+            return out;
+        };
+        let inner = &after[1..end];
+        let name_len = inner
+            .bytes()
+            .take_while(|b| b.is_ascii_alphanumeric())
+            .count();
+        let name = &inner[..name_len];
+        let raw = RAW_TEXT_TAGS.iter().any(|t| name.eq_ignore_ascii_case(t));
+        if raw && inner.ends_with('/') {
+            rest = &after[end + 1..];
+        } else {
+            out.push('<');
+            rest = &after[1..];
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 pub fn sanitize_chapter(raw_html: &str, book_id: i64, chapter_dir: &str, mode: SrcMode) -> String {
-    let step1 = svg_image_to_img(raw_html);
+    let step0 = strip_self_closing_raw_text(raw_html);
+    let step1 = svg_image_to_img(&step0);
     let step2 = if mode == SrcMode::Mobi {
         rewrite_mobi_recindex(&step1)
     } else {
@@ -249,4 +283,25 @@ fn escape_html_text(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn self_closing_raw_text_tags_do_not_swallow_chapter() {
+        let html = "<html><head><title/></head><body><p>Merhaba</p></body></html>";
+        assert!(sanitize_chapter(html, 1, "", SrcMode::Epub).contains("Merhaba"));
+        let html = "<html><head><script src=\"a.js\"/></head><body><p>Merhaba</p></body></html>";
+        assert!(sanitize_chapter(html, 1, "", SrcMode::Epub).contains("Merhaba"));
+    }
+
+    #[test]
+    fn normal_title_is_still_removed() {
+        let html = "<html><head><title>Gizli</title></head><body><p>Merhaba</p></body></html>";
+        let out = sanitize_chapter(html, 1, "", SrcMode::Epub);
+        assert!(!out.contains("Gizli"));
+        assert!(out.contains("Merhaba"));
+    }
 }

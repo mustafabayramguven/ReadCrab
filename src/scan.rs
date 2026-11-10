@@ -166,9 +166,9 @@ async fn process_single_book(state: &AppState, disc: &DiscoveredFile, covers_dir
                 |r| r.get(0),
             )?;
 
-            let existing: Option<(i64, i64, i64, i64, i64, i64)> = conn
+            let existing: Option<(i64, i64, i64, i64, i64, i64, Option<String>)> = conn
                 .query_row(
-                    "SELECT id, series_id, size, mtime, missing, sort_index
+                    "SELECT id, series_id, size, mtime, missing, sort_index, error
                      FROM books WHERE rel_path = ?1",
                     rusqlite::params![rel_path],
                     |r| {
@@ -179,13 +179,17 @@ async fn process_single_book(state: &AppState, disc: &DiscoveredFile, covers_dir
                             r.get(3)?,
                             r.get(4)?,
                             r.get(5)?,
+                            r.get(6)?,
                         ))
                     },
                 )
                 .optional()?;
 
-            if let Some((book_id, old_series_id, size, mtime, missing, sort_idx)) = existing {
-                if size == disc_size && mtime == disc_mtime && missing == 0 {
+            if let Some((book_id, old_series_id, size, mtime, missing, sort_idx, error)) =
+                existing
+            {
+                // hatalı kayıt geçici nedenle olabilir (zaman aşımı), yeniden denenir
+                if size == disc_size && mtime == disc_mtime && missing == 0 && error.is_none() {
                     if old_series_id != series_id || sort_idx != disc_sort {
                         conn.execute(
                             "UPDATE books SET series_id = ?1, sort_index = ?2 WHERE id = ?3",
