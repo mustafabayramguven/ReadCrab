@@ -3,3 +3,10 @@ data/
 scripts/e2e/screenshots/
 scripts/e2e/node_modules/
 scripts/e2e/test-results/
+android/.gradle/
+android/build/
+android/app/build/
+android/app/src/main/jniLibs/
+android/local.properties
+*.iml
+.idea/

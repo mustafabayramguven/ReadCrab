@@ -1,0 +1,27 @@
+name: lock
+on:
+  push:
+    branches: [android]
+    paths:
+      - "Cargo.toml"
+      - "crates/core/Cargo.toml"
+permissions:
+  contents: write
+jobs:
+  lock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.89.0
+      # metadata yalnız eksik girdileri ekler, mevcut sürümleri oynatmaz
+      - run: cargo metadata --format-version 1 > /dev/null
+      - run: |
+          if git diff --quiet Cargo.lock; then echo "Cargo.lock güncel"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock
+          git commit -m "Cargo.lock: crates/core bağımlılıkları eklendi"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
