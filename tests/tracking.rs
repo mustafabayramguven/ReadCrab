@@ -4,7 +4,7 @@ use axum::{
     body::Body,
     http::{header, Request, StatusCode},
 };
-use common::{body_json, login_as_admin, make_cbz, make_epub, png, test_app, EpubOpts};
+use common::{body_json, call, login_as_admin, make_cbz, make_epub, png, test_app, EpubOpts};
 use readcrab::scan::scan_once;
 use tower::ServiceExt;
 
@@ -831,4 +831,161 @@ async fn ping_client_id_book_mismatch_409() {
     assert_eq!(hist["items"][0]["book_id"], cbz_id);
     assert_eq!(hist["items"][0]["active_seconds"], 30);
     assert_eq!(hist["items"][0]["pages_read"], 3);
+}
+
+fn put_progress_body(locator: &str, client_ts: Option<i64>) -> String {
+    let ts = match client_ts {
+        Some(t) => format!(r#","client_ts":{t}"#),
+        None => String::new(),
+    };
+    format!(r#"{{"locator":"{locator}","percent":0.5,"local_date":"2026-11-08"{ts}}}"#)
+}
+
+#[tokio::test]
+async fn progress_get_returns_updated_at() {
+    let (app, dirs) = test_app().await;
+    let cookie = login_as_admin(&app).await;
+    let (cbz_id, _) = setup_two_books(&dirs).await;
+    let uri = format!("/api/books/{cbz_id}/progress");
+
+    let (st, v) = call(&app, "GET", &uri, &cookie, None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(v["updated_at"], 0);
+
+    let body = put_progress_body("1", None);
+    let (st, _) = call(&app, "PUT", &uri, &cookie, Some(body.as_str())).await;
+    assert_eq!(st, StatusCode::OK);
+
+    let (_, v) = call(&app, "GET", &uri, &cookie, None).await;
+    assert!(v["updated_at"].as_i64().unwrap() > 0);
+}
+
+#[tokio::test]
+async fn progress_put_with_client_ts_applies_when_newer() {
+    let (app, dirs) = test_app().await;
+    let cookie = login_as_admin(&app).await;
+    let (cbz_id, _) = setup_two_books(&dirs).await;
+    let uri = format!("/api/books/{cbz_id}/progress");
+
+    let body = put_progress_body("1", Some(1000));
+    let (st, v) = call(&app, "PUT", &uri, &cookie, Some(body.as_str())).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(v["applied"], true);
+    assert_eq!(v["updated_at"], 1000);
+
+    let body = put_progress_body("2", Some(2000));
+    let (st, v) = call(&app, "PUT", &uri, &cookie, Some(body.as_str())).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(v["applied"], true);
+
+    let (_, v) = call(&app, "GET", &uri, &cookie, None).await;
+    assert_eq!(v["locator"], "2");
+    assert_eq!(v["updated_at"], 2000);
+}
+
+#[tokio::test]
+async fn progress_put_with_stale_client_ts_is_ignored() {
+    let (app, dirs) = test_app().await;
+    let cookie = login_as_admin(&app).await;
+    let (cbz_id, _) = setup_two_books(&dirs).await;
+    let uri = format!("/api/books/{cbz_id}/progress");
+
+    let body = put_progress_body("5", Some(2000));
+    let (st, _) = call(&app, "PUT", &uri, &cookie, Some(body.as_str())).await;
+    assert_eq!(st, StatusCode::OK);
+
+    let body = put_progress_body("1", Some(1500));
+    let (st, v) = call(&app, "PUT", &uri, &cookie, Some(body.as_str())).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(v["applied"], false);
+    assert_eq!(v["updated_at"], 2000);
+
+    let (_, v) = call(&app, "GET", &uri, &cookie, None).await;
+    assert_eq!(v["locator"], "5");
+}
+
+#[tokio::test]
+async fn progress_put_equal_client_ts_applies() {
+    let (app, dirs) = test_app().await;
+    let cookie = login_as_admin(&app).await;
+    let (cbz_id, _) = setup_two_books(&dirs).await;
+    let uri = format!("/api/books/{cbz_id}/progress");
+
+    let body = put_progress_body("1", Some(1000));
+    for _ in 0..2 {
+        let (st, v) = call(&app, "PUT", &uri, &cookie, Some(body.as_str())).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(v["applied"], true);
+    }
+}
+
+#[tokio::test]
+async fn progress_put_future_client_ts_is_clamped() {
+    let (app, dirs) = test_app().await;
+    let cookie = login_as_admin(&app).await;
+    let (cbz_id, _) = setup_two_books(&dirs).await;
+    let uri = format!("/api/books/{cbz_id}/progress");
+
+    let body = put_progress_body("1", Some(99_999_999_999));
+    let (st, v) = call(&app, "PUT", &uri, &cookie, Some(body.as_str())).await;
+    assert_eq!(st, StatusCode::OK);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    assert!(v["updated_at"].as_i64().unwrap() <= now + 5);
+}
+
+#[tokio::test]
+async fn progress_put_invalid_client_ts_rejected() {
+    let (app, dirs) = test_app().await;
+    let cookie = login_as_admin(&app).await;
+    let (cbz_id, _) = setup_two_books(&dirs).await;
+    let uri = format!("/api/books/{cbz_id}/progress");
+
+    let body = put_progress_body("1", Some(0));
+    let (st, _) = call(&app, "PUT", &uri, &cookie, Some(body.as_str())).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn status_put_respects_client_ts() {
+    let (app, dirs) = test_app().await;
+    let cookie = login_as_admin(&app).await;
+    let (cbz_id, _) = setup_two_books(&dirs).await;
+    let status_uri = format!("/api/books/{cbz_id}/status");
+    let progress_uri = format!("/api/books/{cbz_id}/progress");
+
+    let body = r#"{"status":"finished","local_date":"2026-11-08","client_ts":3000}"#;
+    let (st, v) = call(&app, "PUT", &status_uri, &cookie, Some(body)).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(v["applied"], true);
+    assert_eq!(v["updated_at"], 3000);
+
+    let body = r#"{"status":"unread","local_date":"2026-11-08","client_ts":2000}"#;
+    let (st, v) = call(&app, "PUT", &status_uri, &cookie, Some(body)).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(v["applied"], false);
+    assert_eq!(v["status"], "finished");
+
+    let (_, v) = call(&app, "GET", &progress_uri, &cookie, None).await;
+    assert_eq!(v["status"], "finished");
+}
+
+#[tokio::test]
+async fn progress_put_without_client_ts_keeps_old_behavior() {
+    let (app, dirs) = test_app().await;
+    let cookie = login_as_admin(&app).await;
+    let (cbz_id, _) = setup_two_books(&dirs).await;
+    let uri = format!("/api/books/{cbz_id}/progress");
+
+    let body = put_progress_body("1", None);
+    let (st, v) = call(&app, "PUT", &uri, &cookie, Some(body.as_str())).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(v["applied"], true);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    assert!((v["updated_at"].as_i64().unwrap() - now).abs() <= 5);
 }
