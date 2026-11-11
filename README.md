@@ -1,6 +1,6 @@
 # ReadCrab
 
-Kendi sunucunuzda çalışan çizgi roman ve e-kitap kütüphanesi. Kavita ile bağlantısı yoktur.
+Kendi sunucunuzda çalışan çizgi roman ve e-kitap kütüphanesi.
 
 ## Çalıştırma
 
