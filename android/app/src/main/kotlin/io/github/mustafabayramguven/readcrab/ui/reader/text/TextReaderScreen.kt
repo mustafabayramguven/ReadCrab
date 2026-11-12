@@ -7,24 +7,25 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Bookmark
@@ -39,19 +40,15 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -78,25 +75,36 @@ import io.github.mustafabayramguven.readcrab.R
 import io.github.mustafabayramguven.readcrab.RcApp
 import io.github.mustafabayramguven.readcrab.TEXT_FONTS
 import io.github.mustafabayramguven.readcrab.UiPrefs
+import io.github.mustafabayramguven.readcrab.core.BookDetail
 import io.github.mustafabayramguven.readcrab.core.BookmarkItem
 import io.github.mustafabayramguven.readcrab.core.CoreException
+import io.github.mustafabayramguven.readcrab.core.PositionSuggestion
 import io.github.mustafabayramguven.readcrab.core.SearchHitItem
+import io.github.mustafabayramguven.readcrab.core.TextInfo
 import io.github.mustafabayramguven.readcrab.core.TocEntry
 import io.github.mustafabayramguven.readcrab.ui.common.EmptyState
+import io.github.mustafabayramguven.readcrab.ui.common.SyncIndicatorButton
 import io.github.mustafabayramguven.readcrab.ui.common.formatPercent
 import io.github.mustafabayramguven.readcrab.ui.reader.BookmarksSheet
+import io.github.mustafabayramguven.readcrab.ui.reader.ReaderChoiceRow
+import io.github.mustafabayramguven.readcrab.ui.reader.ReaderHint
+import io.github.mustafabayramguven.readcrab.ui.reader.ReaderSection
+import io.github.mustafabayramguven.readcrab.ui.reader.ReaderSettingsSheet
+import io.github.mustafabayramguven.readcrab.ui.reader.ReaderSliderRow
+import io.github.mustafabayramguven.readcrab.ui.reader.ReaderSwitchRow
 import io.github.mustafabayramguven.readcrab.ui.reader.ReaderWindowEffects
 import io.github.mustafabayramguven.readcrab.ui.reader.ReadingTracker
+import io.github.mustafabayramguven.readcrab.ui.reader.RemotePositionDialog
 import io.github.mustafabayramguven.readcrab.ui.theme.Dimens
 import io.github.mustafabayramguven.readcrab.ui.theme.isEffectiveDark
 import io.github.mustafabayramguven.readcrab.ui.theme.readerColors
-import io.github.mustafabayramguven.readcrab.work.Scheduler
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -127,11 +135,12 @@ data class TextState(
     val loading: Boolean = true, val error: String? = null, val title: String = "", val seriesId: Long = 0,
     val chapterCount: Int = 1, val toc: List<TocEntry> = emptyList(),
     val chapter: Int = 0, val ratio: Double = 0.0, val page: Int = 0, val pages: Int = 1, val percent: Double = 0.0,
-    val barsVisible: Boolean = true, val sheet: TextSheet = TextSheet.NONE,
+    val barsVisible: Boolean = false, val sheet: TextSheet = TextSheet.NONE,
     val bookmarks: List<BookmarkItem> = emptyList(), val isBookmarked: Boolean = false,
     val search: SearchUi = SearchUi(), val online: Boolean = true,
     val nextBookId: Long? = null, val nextBookTitle: String? = null, val showNextCard: Boolean = false,
     val prefs: UiPrefs = UiPrefs(),
+    val suggestion: PositionSuggestion? = null, val blocks: Int = 0,
 )
 
 sealed interface TextEvent {
@@ -149,6 +158,9 @@ sealed interface TextEvent {
     data class OpenHit(val h: SearchHitItem) : TextEvent
     data class Page(val dir: Int) : TextEvent // ses tuşları / düğme
     data object Retry : TextEvent
+    data object AcceptSuggestion : TextEvent
+    data object DeclineSuggestion : TextEvent
+    data class PatchPrefs(val f: (UiPrefs) -> UiPrefs) : TextEvent
 }
 
 /** "auto" temasını açık/koyu/AMOLED durumuna göre light|dark|black'e çözer. */
@@ -158,15 +170,9 @@ fun resolveReaderTheme(p: UiPrefs, systemDark: Boolean): String = when {
     else -> "light"
 }
 
-// Konum JSON'u web ile uyumludur: {"ch":N,"p":R}
-private fun parseLocator(s: String): Pair<Int, Double>? =
-    runCatching { JSONObject(s).let { it.getInt("ch") to it.getDouble("p") } }.getOrNull()
-
-private fun locatorOf(ch: Int, p: Double): String = "{\"ch\":$ch,\"p\":${"%.6f".format(Locale.ROOT, p)}}"
-
 private fun isNear(locator: String, ch: Int, p: Double, pages: Int): Boolean {
-    val l = parseLocator(locator) ?: return false
-    return l.first == ch && abs(l.second - p) <= max(0.005, 0.5 / pages.coerceAtLeast(1))
+    val l = Locator.parse(locator) ?: return false
+    return l.ch == ch && abs(l.p - p) <= max(0.005, 0.5 / pages.coerceAtLeast(1))
 }
 
 private fun prefsJson(p: UiPrefs, systemDark: Boolean): String {
@@ -175,12 +181,14 @@ private fun prefsJson(p: UiPrefs, systemDark: Boolean): String {
         .put("bg", c.bg).put("fg", c.fg).put("link", c.link)
         .put("font", p.textFont).put("fs", p.textSize)
         .put("lh", (p.lineHeight * 10).roundToInt() / 10.0)
+        .put("ws", (p.wordSpacing * 100).roundToInt() / 100.0)
+        .put("ls", (p.letterSpacing * 100).roundToInt() / 100.0)
         .put("align", p.align).put("mode", p.textMode)
         .put("mg", p.margin).put("zones", p.tapZones)
         .toString()
 }
 
-private class PendingSave(val bookId: Long, val locator: String, val percent: Double)
+private class PendingSave(val bookId: Long, val locator: String, val percent: Double, val pushDelayMs: Long)
 
 class TextReaderViewModel(app: Application) : AndroidViewModel(app) {
     private val rc = getApplication<RcApp>()
@@ -205,11 +213,16 @@ class TextReaderViewModel(app: Application) : AndroidViewModel(app) {
         (rc.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
     private var loadJob: Job? = null
     private var chapterJob: Job? = null
-    private var saveJob: Job? = null
     private var searchJob: Job? = null
-    private var pendingSave: PendingSave? = null
-    // yüklenen / en son kaydedilen konum; kitabı yalnız açmak (ilk `pos`) konum yazmaz
-    private var savedLoc: Pair<Int, Double>? = null
+
+    // Konum kaydı tek tüketicide sıralıdır; kuyrukta yalnız en son konum kalır.
+    private val saveChannel = Channel<PendingSave>(Channel.CONFLATED)
+    // yüklenen / en son kaydedilen konum dizgesi; aynısı yeniden yazılmaz
+    private var lastSavedLocator: String? = null
+    // en son bilinen BLOK indeksi: yeniden düzende ve yeniden yüklemede konumu kesin korur
+    private var curBlock = -1
+    // başka cihaz konumu sorusu yanıtlanana dek bekleyen kitap bilgisi
+    private var pendingLoad: Pair<BookDetail, TextInfo>? = null
 
     // içeriği yerelde olmayan bir bölüm 401 ile getirilemedi: oturum düşmüş
     private val _sessionExpired = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
@@ -223,6 +236,13 @@ class TextReaderViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         viewModelScope.launch { rc.connectivity.online.collect { o -> _state.update { it.copy(online = o) } } }
+        viewModelScope.launch(Dispatchers.IO) {
+            for (s in saveChannel) {
+                runCatching { core.saveProgress(s.bookId, s.locator, s.percent, LocalDate.now().toString()) }
+                    .onFailure { handleError(it) }
+                rc.sync.onLocalChange(s.pushDelayMs) // kayıt bittikten SONRA it: en son konum gider
+            }
+        }
     }
 
     /** Sistem koyu/açık geçişi: "Otomatik" okuyucu teması yeniden hesaplanır. */
@@ -248,14 +268,14 @@ class TextReaderViewModel(app: Application) : AndroidViewModel(app) {
                 if (target in 0 until _state.value.chapterCount) loadChapter(target, 0.0)
             }
             TextEvent.ToggleBookmark -> toggleBookmark()
-            is TextEvent.OpenBookmark -> parseLocator(e.b.locator)?.let { (ch, p) ->
+            is TextEvent.OpenBookmark -> Locator.parse(e.b.locator)?.let { loc ->
                 _state.update { it.copy(sheet = TextSheet.NONE) }
-                loadChapter(ch, p)
+                loadChapter(loc.ch, loc.p)
             }
             is TextEvent.DeleteBookmark -> viewModelScope.launch(Dispatchers.IO) {
                 runCatching { core.deleteBookmark(e.localId) }.onFailure { handleError(it) }
                 reloadBookmarks()
-                Scheduler.kickSync(rc)
+                rc.sync.onLocalChange(2000)
             }
             is TextEvent.SearchQuery -> searchQuery(e.q)
             is TextEvent.OpenHit -> {
@@ -263,7 +283,11 @@ class TextReaderViewModel(app: Application) : AndroidViewModel(app) {
                 loadChapter(e.h.ch, e.h.p)
             }
             is TextEvent.Page -> _commands.tryEmit(WebCommand.Page(e.dir))
-            TextEvent.Retry -> if (dataReady) loadChapter(_state.value.chapter, _state.value.ratio) else load(bookId)
+            TextEvent.Retry ->
+                if (dataReady) loadChapter(_state.value.chapter, _state.value.ratio, curBlock) else load(bookId)
+            TextEvent.AcceptSuggestion -> resolveSuggestion(true)
+            TextEvent.DeclineSuggestion -> resolveSuggestion(false)
+            is TextEvent.PatchPrefs -> rc.prefs.update(e.f)
         }
     }
 
@@ -271,8 +295,9 @@ class TextReaderViewModel(app: Application) : AndroidViewModel(app) {
         bookId = id
         loadedFor = id
         dataReady = false
+        pendingLoad = null
         loadJob?.cancel()
-        _state.update { it.copy(loading = true, error = null) }
+        _state.update { it.copy(loading = true, error = null, suggestion = null) }
         loadJob = viewModelScope.launch(Dispatchers.IO) {
             try {
                 val detail = core.getBook(id)
@@ -283,33 +308,69 @@ class TextReaderViewModel(app: Application) : AndroidViewModel(app) {
                     val pulled = withTimeoutOrNull(4000) { pull.await() }
                     pulled?.exceptionOrNull()?.let { handleError(it) }
                 }
-                val saved = parseLocator(core.getProgress(id).locator)
-                val ch = saved?.first?.takeIf { it in 0 until info.chapterCount } ?: 0
-                val ratio = if (saved != null && saved.first == ch) saved.second.coerceIn(0.0, 1.0) else 0.0
-                val bookmarks = core.listBookmarks(id)
-                val percent = ((ch + ratio) / info.chapterCount).coerceIn(0.0, 1.0)
-                savedLoc = ch to ratio
-                tracker.start(id, percent)
-                _state.update {
-                    it.copy(
-                        title = detail.book.title, seriesId = detail.book.seriesId,
-                        chapterCount = info.chapterCount, toc = info.toc,
-                        chapter = ch, ratio = ratio, percent = percent,
-                        bookmarks = bookmarks, isBookmarked = bookmarks.any { b -> isNear(b.locator, ch, ratio, 1) },
-                        nextBookId = detail.nextBookId, nextBookTitle = detail.nextBookTitle,
-                    )
+                // başka cihazda daha yeni, farklı bir konum varsa web başlatılmadan önce sorulur
+                val sug = runCatching { core.positionSuggestion(id) }.getOrNull()
+                if (sug != null) {
+                    pendingLoad = detail to info
+                    _state.update { it.copy(suggestion = sug, loading = true) }
+                    return@launch
                 }
-                withContext(Dispatchers.Main) {
-                    dataReady = true
-                    startWeb()
-                }
+                finishLoad(id, detail, info)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                handleError(e)
-                _state.update { it.copy(loading = false, error = e.message ?: rc.getString(R.string.reader_error)) }
+                failLoad(e)
             }
         }
+    }
+
+    /** "Oraya git" / "Burada kal": yanıt çekirdeğe işlenir, konum yeniden okunur ve web başlatılır. */
+    private fun resolveSuggestion(accept: Boolean) {
+        val (detail, info) = pendingLoad ?: return
+        val id = bookId
+        pendingLoad = null
+        _state.update { it.copy(suggestion = null) }
+        loadJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                if (accept) core.acceptPosition(id) else core.declinePosition(id)
+                finishLoad(id, detail, info)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                failLoad(e)
+            }
+        }
+    }
+
+    private suspend fun finishLoad(id: Long, detail: BookDetail, info: TextInfo) {
+        val loc = Locator.parse(core.getProgress(id).locator)
+        val ch = loc?.ch?.takeIf { it in 0 until info.chapterCount } ?: 0
+        val here = loc != null && loc.ch == ch
+        val ratio = if (here) loc?.p ?: 0.0 else 0.0
+        val block = if (here) loc?.b ?: -1 else -1
+        val bookmarks = core.listBookmarks(id)
+        val percent = ((ch + ratio) / info.chapterCount).coerceIn(0.0, 1.0)
+        lastSavedLocator = loc?.let { Locator.build(it.ch, it.p, it.b) }
+        curBlock = block
+        tracker.start(id, percent)
+        _state.update {
+            it.copy(
+                title = detail.book.title, seriesId = detail.book.seriesId,
+                chapterCount = info.chapterCount, toc = info.toc,
+                chapter = ch, ratio = ratio, percent = percent,
+                bookmarks = bookmarks, isBookmarked = bookmarks.any { b -> isNear(b.locator, ch, ratio, 1) },
+                nextBookId = detail.nextBookId, nextBookTitle = detail.nextBookTitle,
+            )
+        }
+        withContext(Dispatchers.Main) {
+            dataReady = true
+            startWeb()
+        }
+    }
+
+    private fun failLoad(e: Exception) {
+        handleError(e)
+        _state.update { it.copy(loading = false, error = e.message ?: rc.getString(R.string.reader_error)) }
     }
 
     private fun emitPrefs() {
@@ -320,20 +381,21 @@ class TextReaderViewModel(app: Application) : AndroidViewModel(app) {
     private fun startWeb() {
         if (!webReady || !dataReady) return
         emitPrefs()
-        loadChapter(_state.value.chapter, _state.value.ratio)
+        loadChapter(_state.value.chapter, _state.value.ratio, curBlock)
     }
 
-    private fun loadChapter(ch: Int, ratio: Double) {
+    private fun loadChapter(ch: Int, ratio: Double, block: Int = -1) {
         val s = _state.value
         val target = ch.coerceIn(0, max(s.chapterCount - 1, 0))
         val r = ratio.coerceIn(0.0, 1.0)
         val id = bookId
+        curBlock = block
         _state.update { it.copy(loading = true, error = null, chapter = target, ratio = r, showNextCard = false) }
         chapterJob?.cancel()
         chapterJob = viewModelScope.launch(Dispatchers.IO) {
             try {
                 core.ensureChapter(id, target)
-                _commands.emit(WebCommand.Load("/book/$id/c$target.html", target, r))
+                _commands.emit(WebCommand.Load("/book/$id/c$target.html", target, r, block))
             } catch (e: CancellationException) {
                 throw e
             } catch (e: CoreException.Offline) {
@@ -357,7 +419,11 @@ class TextReaderViewModel(app: Application) : AndroidViewModel(app) {
                 startWeb()
             }
             "loaded" -> onLoaded(o.optInt("ch"), o.optInt("pages", 1))
-            "pos" -> onPos(o.optInt("ch"), o.optDouble("p", 0.0), o.optInt("page"), o.optInt("pages", 1))
+            "pos" -> onPos(
+                ch = o.optInt("ch"), p = o.optDouble("p", 0.0), b = o.optInt("b", -1),
+                nb = o.optInt("nb", 0), page = o.optInt("page"), pages = o.optInt("pages", 1),
+                user = o.optInt("u") == 1,
+            )
             "tap" -> _state.update { it.copy(barsVisible = !it.barsVisible) }
             "edge" -> onEdge(o.optInt("d"))
             "error" -> _state.update { it.copy(loading = false, error = o.optString("msg").ifEmpty { rc.getString(R.string.reader_error) }) }
@@ -375,43 +441,32 @@ class TextReaderViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun onPos(ch: Int, p: Double, page: Int, pages: Int) {
+    private fun onPos(ch: Int, p: Double, b: Int, nb: Int, page: Int, pages: Int, user: Boolean) {
         val s = _state.value
         if (ch != s.chapter) return // eski bölümden gecikmiş mesaj
         val ratio = p.coerceIn(0.0, 1.0)
         val percent = ((ch + ratio) / s.chapterCount).coerceIn(0.0, 1.0)
         val paged = s.prefs.textMode == "page"
         val pg = pages.coerceAtLeast(1)
-        tracker.addPage("$ch:${if (paged) page else (ratio * 20).toInt()}")
-        tracker.setPercent(percent)
+        val block = b.takeIf { it >= 0 }
+        curBlock = b
+        // UI durumu her mesajda güncellenir
         _state.update {
             it.copy(
-                ratio = ratio, page = page, pages = pg, percent = percent,
-                isBookmarked = it.bookmarks.any { b -> isNear(b.locator, ch, ratio, pg) },
+                ratio = ratio, page = page, pages = pg, percent = percent, blocks = nb,
+                isBookmarked = it.bookmarks.any { bm -> isNear(bm.locator, ch, ratio, pg) },
                 showNextCard = ch == it.chapterCount - 1 && it.nextBookId != null &&
                     (if (paged) page >= pg - 1 else ratio >= 0.98),
             )
         }
-        // paged modda sayfa sınırına oturma, kaydırmada piksel yuvarlaması konumu hafifçe oynatır
-        val tol = if (paged) 0.5 / max(pg - 1, 1) + 1e-6 else 0.005
-        val loc = savedLoc
-        if (loc != null && loc.first == ch && abs(loc.second - ratio) <= tol) return
-        savedLoc = ch to ratio
-        pendingSave = PendingSave(bookId, locatorOf(ch, ratio), percent)
-        saveJob?.cancel()
-        saveJob = viewModelScope.launch {
-            delay(500) // 500 ms birleştirme
-            flushSave()
-        }
-    }
-
-    private suspend fun flushSave() {
-        val s = pendingSave ?: return
-        pendingSave = null
-        withContext(Dispatchers.IO) {
-            runCatching { core.saveProgress(s.bookId, s.locator, s.percent, LocalDate.now().toString()) }
-                .onFailure { handleError(it) }
-        }
+        if (!user) return // yerleşim / yeniden düzen konum kaydı değildir
+        tracker.addPage(if (block != null) "$ch:$block" else "$ch:$page")
+        tracker.setPercent(percent)
+        val loc = Locator.build(ch, ratio, block)
+        if (loc == lastSavedLocator) return
+        lastSavedLocator = loc
+        // sayfa modunda her çevirmede hemen, kaydırmada paragraf değişince ~2 sn sonra it
+        saveChannel.trySend(PendingSave(bookId, loc, percent, if (paged) 0L else 2000L))
     }
 
     private fun onEdge(d: Int) {
@@ -434,11 +489,12 @@ class TextReaderViewModel(app: Application) : AndroidViewModel(app) {
                     near.forEach { core.deleteBookmark(it.localId) }
                 } else {
                     val label = rc.getString(R.string.reader_chapter_percent, s.chapter + 1, formatPercent(s.percent))
-                    core.addBookmark(id, locatorOf(s.chapter, s.ratio), label)
+                    // yer imi b'siz yazılır: web ile birebir
+                    core.addBookmark(id, Locator.build(s.chapter, s.ratio, null), label)
                 }
             }.onFailure { handleError(it) }
             reloadBookmarks()
-            Scheduler.kickSync(rc)
+            rc.sync.onLocalChange(2000)
         }
     }
 
@@ -495,11 +551,11 @@ class TextReaderViewModel(app: Application) : AndroidViewModel(app) {
 
     override fun onCleared() {
         tracker.stop()
-        // bekleyen son konum kapsam iptal edilmeden önce yazılır
-        val s = pendingSave ?: return
-        pendingSave = null
+        // kanalda kalan son konum kapsam iptal edilmeden yazılır
+        val s = saveChannel.tryReceive().getOrNull() ?: return
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             runCatching { core.saveProgress(s.bookId, s.locator, s.percent, LocalDate.now().toString()) }
+            rc.sync.onLocalChange(0)
         }
     }
 }
@@ -514,6 +570,7 @@ fun TextReaderScreen(
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
     val systemDark = isSystemInDarkTheme()
+    val app = LocalContext.current.applicationContext as RcApp
     LaunchedEffect(bookId) { vm.onEvent(TextEvent.Load(bookId)) }
     LaunchedEffect(systemDark) { vm.onSystemDark(systemDark) }
     LaunchedEffect(Unit) { vm.sessionExpired.collect { onSessionExpired() } }
@@ -532,13 +589,15 @@ fun TextReaderScreen(
         android.graphics.Color.parseColor(readerColors(resolveReaderTheme(state.prefs, systemDark)).bg)
     }
     Box(Modifier.fillMaxSize().background(Color(bgInt))) {
+        // görünüm alanı güvenli çizim alanıdır (kesik, köşeler, sistem çubukları); kenar hareketleri WebView'a bırakılır
         ReaderWebView(
             commands = vm.commands,
             bgColor = bgInt,
             onMessage = { vm.onEvent(TextEvent.Web(it)) },
             modifier = Modifier
                 .fillMaxSize()
-                .then(if (state.prefs.immersive) Modifier else Modifier.windowInsetsPadding(WindowInsets.systemBars)),
+                .windowInsetsPadding(WindowInsets.safeDrawing)
+                .systemGestureExclusion(),
         )
 
         val error = state.error
@@ -590,6 +649,19 @@ fun TextReaderScreen(
                 }
             }
         }
+        ReaderHint(state.prefs) { app.prefs.update { it.copy(readerHintSeen = true) } }
+    }
+
+    // C5: başka cihazda daha yeni, farklı bir konum var
+    state.suggestion?.let { sug ->
+        val loc = Locator.parse(sug.locator)
+        val pct = (sug.percent * 100).roundToInt()
+        val where = if (loc != null) stringResource(R.string.reader_remote_chapter, loc.ch + 1, pct) else "%$pct"
+        RemotePositionDialog(
+            where = where,
+            onGo = { vm.onEvent(TextEvent.AcceptSuggestion) },
+            onStay = { vm.onEvent(TextEvent.DeclineSuggestion) },
+        )
     }
 
     when (state.sheet) {
@@ -602,7 +674,7 @@ fun TextReaderScreen(
             onDismiss = { vm.onEvent(TextEvent.CloseSheet) },
         )
         TextSheet.SEARCH -> SearchSheet(state, vm)
-        TextSheet.SETTINGS -> SettingsSheet(state, vm)
+        TextSheet.SETTINGS -> TextSettingsSheet(state, vm)
     }
 }
 
@@ -623,6 +695,7 @@ private fun TextTopBar(state: TextState, vm: TextReaderViewModel, onBack: (Long)
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
+            SyncIndicatorButton()
             IconButton(onClick = { vm.onEvent(TextEvent.ToggleBookmark) }) {
                 Icon(
                     if (state.isBookmarked) Icons.Filled.Bookmark else Icons.Filled.BookmarkBorder,
@@ -636,9 +709,6 @@ private fun TextTopBar(state: TextState, vm: TextReaderViewModel, onBack: (Long)
             }
             IconButton(onClick = { vm.onEvent(TextEvent.OpenSheet(TextSheet.TOC)) }) {
                 Icon(Icons.Outlined.Toc, contentDescription = stringResource(R.string.reader_toc))
-            }
-            IconButton(onClick = { vm.onEvent(TextEvent.OpenSheet(TextSheet.SETTINGS)) }) {
-                Icon(Icons.Outlined.Settings, contentDescription = stringResource(R.string.reader_settings))
             }
         }
     }
@@ -673,6 +743,11 @@ private fun TextBottomBar(state: TextState, vm: TextReaderViewModel) {
                     enabled = state.chapter + 1 < state.chapterCount,
                 ) {
                     Icon(Icons.Outlined.SkipNext, contentDescription = null)
+                }
+                TextButton(onClick = { vm.onEvent(TextEvent.OpenSheet(TextSheet.SETTINGS)) }) {
+                    Icon(Icons.Outlined.Settings, contentDescription = null)
+                    Spacer(Modifier.width(4.dp))
+                    Text(stringResource(R.string.reader_settings_label))
                 }
             }
         }
@@ -765,94 +840,104 @@ private fun SearchSheet(state: TextState, vm: TextReaderViewModel) {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SettingsSheet(state: TextState, vm: TextReaderViewModel) {
-    val app = LocalContext.current.applicationContext as RcApp
+private fun TextSettingsSheet(state: TextState, vm: TextReaderViewModel) {
     val p = state.prefs
-    ModalBottomSheet(onDismissRequest = { vm.onEvent(TextEvent.CloseSheet) }) {
-        Column(
-            Modifier.padding(horizontal = Dimens.gutter).padding(bottom = Dimens.s5),
-            verticalArrangement = Arrangement.spacedBy(Dimens.s2),
-        ) {
-            Text(stringResource(R.string.reader_font), style = MaterialTheme.typography.labelLarge)
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(Dimens.s2)) {
-                for ((key, label) in TEXT_FONTS) {
-                    FilterChip(
-                        selected = p.textFont == key,
-                        onClick = { app.prefs.update { it.copy(textFont = key) } },
-                        label = { Text(label) },
-                    )
-                }
-            }
-
-            Text("${stringResource(R.string.reader_font_size)}: ${p.textSize}", style = MaterialTheme.typography.labelLarge)
-            Slider(
+    fun patch(f: (UiPrefs) -> UiPrefs) = vm.onEvent(TextEvent.PatchPrefs(f))
+    ReaderSettingsSheet(
+        title = stringResource(R.string.reader_settings),
+        onDismiss = { vm.onEvent(TextEvent.CloseSheet) },
+    ) {
+        ReaderSection(stringResource(R.string.reader_theme), first = true) {
+            ReaderChoiceRow(
+                options = listOf(
+                    "auto" to stringResource(R.string.reader_theme_auto),
+                    "light" to stringResource(R.string.reader_theme_light),
+                    "dark" to stringResource(R.string.reader_theme_dark),
+                    "sepia" to stringResource(R.string.reader_theme_sepia),
+                    "black" to stringResource(R.string.reader_theme_black),
+                ),
+                selected = p.readerTheme,
+                onSelect = { k -> patch { it.copy(readerTheme = k) } },
+            )
+        }
+        ReaderSection(stringResource(R.string.reader_font)) {
+            ReaderChoiceRow(
+                options = TEXT_FONTS,
+                selected = p.textFont,
+                onSelect = { k -> patch { it.copy(textFont = k) } },
+            )
+        }
+        ReaderSection(stringResource(R.string.reader_section_text)) {
+            ReaderSliderRow(
+                label = stringResource(R.string.reader_font_size),
+                valueText = "${p.textSize} px",
                 value = p.textSize.toFloat(),
-                onValueChange = { v -> app.prefs.update { it.copy(textSize = v.roundToInt()) } },
-                valueRange = 14f..28f,
+                range = 14f..28f,
                 steps = 6,
-            )
-
-            Text(
-                "${stringResource(R.string.reader_line_height)}: ${"%.1f".format(Locale.ROOT, p.lineHeight)}",
-                style = MaterialTheme.typography.labelLarge,
-            )
-            Slider(
+            ) { v -> patch { it.copy(textSize = (v / 2f).roundToInt() * 2) } }
+            ReaderSliderRow(
+                label = stringResource(R.string.reader_line_height),
+                valueText = "%.1f".format(Locale.ROOT, p.lineHeight),
                 value = p.lineHeight,
-                onValueChange = { v -> app.prefs.update { it.copy(lineHeight = (v * 10).roundToInt() / 10f) } },
-                valueRange = 1.2f..2.2f,
+                range = 1.2f..2.2f,
                 steps = 9,
-            )
-
-            Text("${stringResource(R.string.reader_margin)}: ${p.margin}", style = MaterialTheme.typography.labelLarge)
-            Slider(
+            ) { v -> patch { it.copy(lineHeight = (v * 10).roundToInt() / 10f) } }
+            ReaderSliderRow(
+                label = stringResource(R.string.reader_word_spacing),
+                valueText = "%.2f em".format(Locale.ROOT, p.wordSpacing),
+                value = p.wordSpacing,
+                range = 0f..0.5f,
+                steps = 9,
+            ) { v -> patch { it.copy(wordSpacing = (v / 0.05f).roundToInt() * 0.05f) } }
+            ReaderSliderRow(
+                label = stringResource(R.string.reader_letter_spacing),
+                valueText = "%.2f em".format(Locale.ROOT, p.letterSpacing),
+                value = p.letterSpacing,
+                range = 0f..0.1f,
+                steps = 9,
+            ) { v -> patch { it.copy(letterSpacing = (v / 0.01f).roundToInt() * 0.01f) } }
+            ReaderSliderRow(
+                label = stringResource(R.string.reader_margin),
+                valueText = "${p.margin}%",
                 value = p.margin.toFloat(),
-                onValueChange = { v -> app.prefs.update { it.copy(margin = v.roundToInt()) } },
-                valueRange = 0f..20f,
+                range = 0f..20f,
                 steps = 19,
+            ) { v -> patch { it.copy(margin = v.roundToInt()) } }
+        }
+        ReaderSection(stringResource(R.string.reader_section_page)) {
+            Text(stringResource(R.string.reader_align), style = MaterialTheme.typography.bodyMedium)
+            ReaderChoiceRow(
+                options = listOf(
+                    "left" to stringResource(R.string.reader_align_left),
+                    "justify" to stringResource(R.string.reader_align_justify),
+                ),
+                selected = p.align,
+                onSelect = { k -> patch { it.copy(align = k) } },
             )
-
-            Text(stringResource(R.string.reader_align), style = MaterialTheme.typography.labelLarge)
-            val aligns = listOf("left" to R.string.reader_align_left, "justify" to R.string.reader_align_justify)
-            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                aligns.forEachIndexed { i, (key, label) ->
-                    SegmentedButton(
-                        selected = p.align == key,
-                        onClick = { app.prefs.update { it.copy(align = key) } },
-                        shape = SegmentedButtonDefaults.itemShape(i, aligns.size),
-                    ) { Text(stringResource(label)) }
-                }
-            }
-
-            Text(stringResource(R.string.reader_mode), style = MaterialTheme.typography.labelLarge)
-            val modes = listOf("page" to R.string.reader_mode_page, "scroll" to R.string.reader_mode_scroll)
-            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                modes.forEachIndexed { i, (key, label) ->
-                    SegmentedButton(
-                        selected = p.textMode == key,
-                        onClick = { app.prefs.update { it.copy(textMode = key) } },
-                        shape = SegmentedButtonDefaults.itemShape(i, modes.size),
-                    ) { Text(stringResource(label)) }
-                }
-            }
-
-            Text(stringResource(R.string.reader_theme), style = MaterialTheme.typography.labelLarge)
-            val themes = listOf(
-                "auto" to R.string.reader_theme_auto,
-                "light" to R.string.reader_theme_light,
-                "dark" to R.string.reader_theme_dark,
-                "sepia" to R.string.reader_theme_sepia,
-                "black" to R.string.reader_theme_black,
+            Spacer(Modifier.height(Dimens.s3))
+            Text(stringResource(R.string.reader_mode), style = MaterialTheme.typography.bodyMedium)
+            ReaderChoiceRow(
+                options = listOf(
+                    "scroll" to stringResource(R.string.reader_mode_scroll),
+                    "page" to stringResource(R.string.reader_mode_page),
+                ),
+                selected = p.textMode,
+                onSelect = { k -> patch { it.copy(textMode = k) } },
             )
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(Dimens.s2)) {
-                for ((key, label) in themes) {
-                    FilterChip(
-                        selected = p.readerTheme == key,
-                        onClick = { app.prefs.update { it.copy(readerTheme = key) } },
-                        label = { Text(stringResource(label)) },
-                    )
-                }
+        }
+        ReaderSection(stringResource(R.string.reader_section_behavior)) {
+            ReaderSwitchRow(stringResource(R.string.settings_tap_zones), p.tapZones) { v ->
+                patch { it.copy(tapZones = v) }
+            }
+            ReaderSwitchRow(stringResource(R.string.settings_volume_keys), p.volumeKeys) { v ->
+                patch { it.copy(volumeKeys = v) }
+            }
+            ReaderSwitchRow(stringResource(R.string.settings_keep_awake), p.keepAwake) { v ->
+                patch { it.copy(keepAwake = v) }
+            }
+            ReaderSwitchRow(stringResource(R.string.settings_immersive), p.immersive) { v ->
+                patch { it.copy(immersive = v) }
             }
         }
     }

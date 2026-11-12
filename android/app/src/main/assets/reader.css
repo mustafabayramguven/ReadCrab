@@ -1,0 +1,15 @@
+html { -webkit-tap-highlight-color: transparent; }
+html.paged { overflow: hidden; touch-action: none; -webkit-user-select: none; user-select: none; }
+html.paged body {
+  box-sizing: border-box; margin: 0; max-width: none;
+  width: var(--pw); height: var(--ph);
+  padding: var(--mt) var(--m) var(--mb);
+  column-width: calc(var(--pw) - 2 * var(--m));
+  column-gap: calc(2 * var(--m));
+  column-fill: auto;
+}
+#pg {
+  position: fixed; left: 0; right: 0; bottom: 8px; text-align: center;
+  font: 12px/1 system-ui, sans-serif; color: var(--fg); opacity: 0.55; pointer-events: none;
+}
+html:not(.paged) #pg { display: none; }

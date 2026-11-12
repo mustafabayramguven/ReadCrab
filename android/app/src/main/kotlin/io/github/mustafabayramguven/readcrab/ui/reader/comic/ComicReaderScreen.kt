@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -27,21 +29,19 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.outlined.Bookmarks
 import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -54,7 +54,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -75,28 +74,38 @@ import coil3.request.ImageRequest
 import io.github.mustafabayramguven.readcrab.R
 import io.github.mustafabayramguven.readcrab.RcApp
 import io.github.mustafabayramguven.readcrab.UiPrefs
+import io.github.mustafabayramguven.readcrab.core.BookDetail
 import io.github.mustafabayramguven.readcrab.core.BookmarkItem
 import io.github.mustafabayramguven.readcrab.core.CoreException
+import io.github.mustafabayramguven.readcrab.core.PositionSuggestion
 import io.github.mustafabayramguven.readcrab.image.RcImage
 import io.github.mustafabayramguven.readcrab.ui.common.EmptyState
+import io.github.mustafabayramguven.readcrab.ui.common.SyncIndicatorButton
 import io.github.mustafabayramguven.readcrab.ui.reader.BookmarksSheet
+import io.github.mustafabayramguven.readcrab.ui.reader.ReaderChoiceRow
+import io.github.mustafabayramguven.readcrab.ui.reader.ReaderHint
+import io.github.mustafabayramguven.readcrab.ui.reader.ReaderSection
+import io.github.mustafabayramguven.readcrab.ui.reader.ReaderSettingsSheet
+import io.github.mustafabayramguven.readcrab.ui.reader.ReaderSwitchRow
 import io.github.mustafabayramguven.readcrab.ui.reader.ReaderWindowEffects
 import io.github.mustafabayramguven.readcrab.ui.reader.ReadingTracker
+import io.github.mustafabayramguven.readcrab.ui.reader.RemotePositionDialog
 import io.github.mustafabayramguven.readcrab.ui.theme.Dimens
-import io.github.mustafabayramguven.readcrab.work.Scheduler
+import io.github.mustafabayramguven.readcrab.ui.theme.comicBgColor
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -106,9 +115,10 @@ import kotlin.math.roundToInt
 data class ComicState(
     val loading: Boolean = true, val error: String? = null, val title: String = "", val seriesId: Long = 0,
     val pageCount: Int = 0, val page: Int = 0, val mode: String = "ltr", // ltr | rtl | webtoon
-    val barsVisible: Boolean = true, val showBookmarks: Boolean = false,
+    val barsVisible: Boolean = false, val showBookmarks: Boolean = false,
     val bookmarks: List<BookmarkItem> = emptyList(),
     val nextBookId: Long? = null, val nextBookTitle: String? = null, val prefs: UiPrefs = UiPrefs(),
+    val suggestion: PositionSuggestion? = null, val settingsOpen: Boolean = false,
 )
 
 sealed interface ComicEvent {
@@ -123,6 +133,11 @@ sealed interface ComicEvent {
     data class OpenBookmark(val b: BookmarkItem) : ComicEvent
     data class DeleteBookmark(val localId: Long) : ComicEvent
     data object Retry : ComicEvent
+    data object OpenSettings : ComicEvent
+    data object CloseSettings : ComicEvent
+    data object AcceptSuggestion : ComicEvent
+    data object DeclineSuggestion : ComicEvent
+    data class PatchPrefs(val f: (UiPrefs) -> UiPrefs) : ComicEvent
 }
 
 sealed interface ComicEffect { data class ScrollTo(val page: Int) : ComicEffect }
@@ -144,18 +159,21 @@ class ComicReaderViewModel(app: Application) : AndroidViewModel(app) {
     private var loadJob: Job? = null
 
     // Konum yazımı tek tüketicide sıralıdır: son yazan her zaman en son sayfadır.
-    private val saveRequests = MutableStateFlow<Int?>(null)
+    private val saveChannel = Channel<Int>(Channel.CONFLATED)
     // yüklenen / en son kaydedilmesi istenen sayfa; kitabı yalnız açmak konum yazmaz
     private var savedPage = -1
+    // başka cihaz konumu sorusu yanıtlanana dek bekleyen kitap bilgisi
+    private var pendingDetail: BookDetail? = null
 
     init {
         viewModelScope.launch { rc.prefs.state.collect { p -> _state.update { it.copy(prefs = p) } } }
         viewModelScope.launch(Dispatchers.IO) {
-            saveRequests.filterNotNull().collectLatest { page ->
+            for (page in saveChannel) {
                 val count = _state.value.pageCount.coerceAtLeast(1)
                 val percent = ((page + 1).toDouble() / count).coerceIn(0.0, 1.0)
                 runCatching { core.saveProgress(bookId, page.toString(), percent, LocalDate.now().toString()) }
                     .onFailure { handleError(it) }
+                rc.sync.onLocalChange(0) // her sayfa çevirmede hemen it
             }
         }
     }
@@ -190,9 +208,14 @@ class ComicReaderViewModel(app: Application) : AndroidViewModel(app) {
             is ComicEvent.DeleteBookmark -> viewModelScope.launch(Dispatchers.IO) {
                 runCatching { core.deleteBookmark(e.localId) }.onFailure { handleError(it) }
                 reloadBookmarks()
-                Scheduler.kickSync(rc)
+                rc.sync.onLocalChange(2000)
             }
             ComicEvent.Retry -> load(bookId)
+            ComicEvent.OpenSettings -> _state.update { it.copy(settingsOpen = true) }
+            ComicEvent.CloseSettings -> _state.update { it.copy(settingsOpen = false) }
+            ComicEvent.AcceptSuggestion -> resolveSuggestion(true)
+            ComicEvent.DeclineSuggestion -> resolveSuggestion(false)
+            is ComicEvent.PatchPrefs -> rc.prefs.update(e.f)
         }
     }
 
@@ -200,7 +223,8 @@ class ComicReaderViewModel(app: Application) : AndroidViewModel(app) {
         bookId = id
         loadedFor = id
         loadJob?.cancel()
-        _state.update { it.copy(loading = true, error = null) }
+        pendingDetail = null
+        _state.update { it.copy(loading = true, error = null, suggestion = null) }
         loadJob = viewModelScope.launch(Dispatchers.IO) {
             try {
                 val detail = core.getBook(id)
@@ -215,27 +239,60 @@ class ComicReaderViewModel(app: Application) : AndroidViewModel(app) {
                     val pulled = withTimeoutOrNull(4000) { pull.await() }
                     pulled?.exceptionOrNull()?.let { handleError(it) }
                 }
-                val page = core.getProgress(id).locator.toIntOrNull()?.takeIf { it in 0 until count } ?: 0
-                val mode = rc.prefs.comicModeFor(id)
-                val bookmarks = core.listBookmarks(id)
-                savedPage = page
-                saveRequests.value = null
-                tracker.start(id, (page + 1).toDouble() / count)
-                _state.update {
-                    it.copy(
-                        loading = false, error = null, title = detail.book.title,
-                        seriesId = detail.book.seriesId, pageCount = count, page = page, mode = mode,
-                        bookmarks = bookmarks, nextBookId = detail.nextBookId,
-                        nextBookTitle = detail.nextBookTitle,
-                    )
+                // başka cihazda daha yeni, farklı bir konum varsa sayfa yüklenmeden önce sorulur
+                val sug = runCatching { core.positionSuggestion(id) }.getOrNull()
+                if (sug != null) {
+                    pendingDetail = detail
+                    _state.update { it.copy(suggestion = sug, pageCount = count, loading = true) }
+                    return@launch
                 }
+                finishLoad(id, detail)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                handleError(e)
-                _state.update { it.copy(loading = false, error = e.message ?: rc.getString(R.string.reader_error)) }
+                failLoad(e)
             }
         }
+    }
+
+    /** "Oraya git" / "Burada kal": yanıt çekirdeğe işlenir, konum yeniden okunur ve yükleme tamamlanır. */
+    private fun resolveSuggestion(accept: Boolean) {
+        val detail = pendingDetail ?: return
+        val id = bookId
+        pendingDetail = null
+        _state.update { it.copy(suggestion = null) }
+        loadJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                if (accept) core.acceptPosition(id) else core.declinePosition(id)
+                finishLoad(id, detail)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                failLoad(e)
+            }
+        }
+    }
+
+    private fun finishLoad(id: Long, detail: BookDetail) {
+        val count = detail.book.pageCount
+        val page = core.getProgress(id).locator.toIntOrNull()?.takeIf { it in 0 until count } ?: 0
+        val mode = rc.prefs.comicModeFor(id)
+        val bookmarks = core.listBookmarks(id)
+        savedPage = page
+        tracker.start(id, (page + 1).toDouble() / count)
+        _state.update {
+            it.copy(
+                loading = false, error = null, title = detail.book.title,
+                seriesId = detail.book.seriesId, pageCount = count, page = page, mode = mode,
+                bookmarks = bookmarks, nextBookId = detail.nextBookId,
+                nextBookTitle = detail.nextBookTitle,
+            )
+        }
+    }
+
+    private fun failLoad(e: Exception) {
+        handleError(e)
+        _state.update { it.copy(loading = false, error = e.message ?: rc.getString(R.string.reader_error)) }
     }
 
     private fun pageChanged(p: Int) {
@@ -248,7 +305,7 @@ class ComicReaderViewModel(app: Application) : AndroidViewModel(app) {
         tracker.setPercent(percent)
         if (page != savedPage) {
             savedPage = page
-            saveRequests.value = page
+            saveChannel.trySend(page)
         }
     }
 
@@ -262,7 +319,7 @@ class ComicReaderViewModel(app: Application) : AndroidViewModel(app) {
                 else core.addBookmark(id, page.toString(), "Sayfa ${page + 1}")
             }.onFailure { handleError(it) }
             reloadBookmarks()
-            Scheduler.kickSync(rc)
+            rc.sync.onLocalChange(2000)
         }
     }
 
@@ -277,6 +334,16 @@ class ComicReaderViewModel(app: Application) : AndroidViewModel(app) {
 
     override fun onCleared() {
         tracker.stop()
+        // kanalda kalan son sayfa kapsam iptal edilmeden yazılır
+        val page = saveChannel.tryReceive().getOrNull() ?: return
+        val id = bookId
+        val count = _state.value.pageCount.coerceAtLeast(1)
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            runCatching {
+                core.saveProgress(id, page.toString(), (page + 1).toDouble() / count, LocalDate.now().toString())
+            }
+            rc.sync.onLocalChange(0)
+        }
     }
 }
 
@@ -309,7 +376,8 @@ fun ComicReaderScreen(
         true
     })
 
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
+    val app = LocalContext.current.applicationContext as RcApp
+    Box(Modifier.fillMaxSize().background(comicBgColor(state.prefs.comicBg))) {
         val error = state.error
         when {
             state.loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
@@ -323,6 +391,22 @@ fun ComicReaderScreen(
             }
             else -> ComicBody(bookId, state, vm, stepper, onBack, onNextBook, onSessionExpired)
         }
+        ReaderHint(state.prefs) { app.prefs.update { it.copy(readerHintSeen = true) } }
+    }
+
+    // C5: başka cihazda daha yeni, farklı bir konum var
+    state.suggestion?.let { sug ->
+        val page = sug.locator.toIntOrNull()
+        val where = if (page != null) {
+            stringResource(R.string.reader_remote_page, page + 1, state.pageCount)
+        } else {
+            "%${(sug.percent * 100).roundToInt()}"
+        }
+        RemotePositionDialog(
+            where = where,
+            onGo = { vm.onEvent(ComicEvent.AcceptSuggestion) },
+            onStay = { vm.onEvent(ComicEvent.DeclineSuggestion) },
+        )
     }
 }
 
@@ -391,6 +475,55 @@ private fun ComicBody(
             onDelete = { vm.onEvent(ComicEvent.DeleteBookmark(it)) },
             onDismiss = { vm.onEvent(ComicEvent.HideBookmarks) },
         )
+    }
+    if (state.settingsOpen) ComicSettingsSheet(state, vm)
+}
+
+@Composable
+private fun ComicSettingsSheet(state: ComicState, vm: ComicReaderViewModel) {
+    val prefs = state.prefs
+    fun patch(f: (UiPrefs) -> UiPrefs) = vm.onEvent(ComicEvent.PatchPrefs(f))
+    ReaderSettingsSheet(
+        title = stringResource(R.string.comic_settings_title),
+        onDismiss = { vm.onEvent(ComicEvent.CloseSettings) },
+    ) {
+        ReaderSection(stringResource(R.string.comic_direction), first = true) {
+            ReaderChoiceRow(
+                options = listOf(
+                    "ltr" to stringResource(R.string.comic_dir_ltr),
+                    "rtl" to stringResource(R.string.comic_dir_rtl),
+                    "webtoon" to stringResource(R.string.comic_dir_webtoon),
+                ),
+                selected = state.mode,
+                onSelect = { vm.onEvent(ComicEvent.SetMode(it)) },
+            )
+        }
+        ReaderSection(stringResource(R.string.reader_background)) {
+            ReaderChoiceRow(
+                options = listOf(
+                    "black" to stringResource(R.string.reader_theme_black),
+                    "dark" to stringResource(R.string.reader_theme_dark),
+                    "sepia" to stringResource(R.string.reader_theme_sepia),
+                    "light" to stringResource(R.string.reader_theme_light),
+                ),
+                selected = prefs.comicBg,
+                onSelect = { k -> patch { it.copy(comicBg = k) } },
+            )
+        }
+        ReaderSection(stringResource(R.string.reader_section_behavior)) {
+            ReaderSwitchRow(stringResource(R.string.settings_tap_zones), prefs.tapZones) { v ->
+                patch { it.copy(tapZones = v) }
+            }
+            ReaderSwitchRow(stringResource(R.string.settings_volume_keys), prefs.volumeKeys) { v ->
+                patch { it.copy(volumeKeys = v) }
+            }
+            ReaderSwitchRow(stringResource(R.string.settings_keep_awake), prefs.keepAwake) { v ->
+                patch { it.copy(keepAwake = v) }
+            }
+            ReaderSwitchRow(stringResource(R.string.settings_immersive), prefs.immersive) { v ->
+                patch { it.copy(immersive = v) }
+            }
+        }
     }
 }
 
@@ -519,7 +652,6 @@ private fun WebtoonPages(
 
 @Composable
 private fun ComicTopBar(state: ComicState, vm: ComicReaderViewModel, onBack: (Long) -> Unit) {
-    var menu by remember { mutableStateOf(false) }
     val bookmarked = state.bookmarks.any { it.locator == state.page.toString() }
     Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f), modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -536,6 +668,7 @@ private fun ComicTopBar(state: ComicState, vm: ComicReaderViewModel, onBack: (Lo
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
+            SyncIndicatorButton()
             IconButton(onClick = { vm.onEvent(ComicEvent.ToggleBookmark) }) {
                 Icon(
                     if (bookmarked) Icons.Filled.Bookmark else Icons.Filled.BookmarkBorder,
@@ -546,30 +679,6 @@ private fun ComicTopBar(state: ComicState, vm: ComicReaderViewModel, onBack: (Lo
             }
             IconButton(onClick = { vm.onEvent(ComicEvent.ShowBookmarks) }) {
                 Icon(Icons.Outlined.Bookmarks, contentDescription = stringResource(R.string.reader_bookmarks))
-            }
-            Box {
-                IconButton(onClick = { menu = true }) {
-                    Icon(Icons.Filled.MoreVert, contentDescription = stringResource(R.string.action_more))
-                }
-                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                    val modes = listOf(
-                        "ltr" to R.string.comic_dir_ltr,
-                        "rtl" to R.string.comic_dir_rtl,
-                        "webtoon" to R.string.comic_dir_webtoon,
-                    )
-                    for ((key, label) in modes) {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(label)) },
-                            onClick = {
-                                menu = false
-                                vm.onEvent(ComicEvent.SetMode(key))
-                            },
-                            leadingIcon = {
-                                if (state.mode == key) Icon(Icons.Filled.Check, contentDescription = null)
-                            },
-                        )
-                    }
-                }
             }
         }
     }
@@ -603,6 +712,13 @@ private fun ComicBottomBar(state: ComicState, vm: ComicReaderViewModel) {
                             drag = null
                         },
                     )
+                }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = { vm.onEvent(ComicEvent.OpenSettings) }) {
+                    Icon(Icons.Outlined.Settings, contentDescription = null)
+                    Spacer(Modifier.width(4.dp))
+                    Text(stringResource(R.string.reader_settings_label))
                 }
             }
         }
