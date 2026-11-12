@@ -7,11 +7,11 @@ use crate::{
     db,
     error::into_core,
     http::{parse_json, BookmarkDto, BookmarksDto, HErr, ProgressDto, PutResDto},
-    library, util, BookmarkItem, Core, CoreError, ProgressInfo, ReadStatus, SyncReport,
-    SyncStatus,
+    library, util, BookmarkItem, Core, CoreError, PositionSuggestion, ProgressInfo, ReadStatus,
+    SyncReport, SyncStatus,
 };
 
-// Aynı anda iki itme (okuyucunun 30 sn'lik itmesi + SyncWorker) yer imini iki kez göndermesin.
+// Aynı anda iki itme (okuyucu çıkışı + elle eşitleme) yer imini iki kez göndermesin.
 static PUSH_LOCK: Mutex<()> = Mutex::new(());
 
 const MAX_BOOKMARKS_PER_BOOK: i64 = 100;
@@ -156,31 +156,59 @@ fn record_error(core: &Core, e: &CoreError) {
 
 // ---- çekme: ilerleme ----
 
-/// Sunucu ilerlemesini birleştirir; sunucu verisi uygulandıysa `true`.
+/// Yerelde bir konum var; sunucununki farklı ve daha yeni: sessizce ezmek yerine kullanıcıya sorulur.
+pub fn suggest_instead(local_locator: &str, local_updated_at: i64, dto: &ProgressDto) -> bool {
+    !local_locator.is_empty()
+        && !dto.locator.is_empty()
+        && local_locator != dto.locator
+        && dto.updated_at > local_updated_at
+}
+
+/// Sunucu ilerlemesini birleştirir; sunucu verisi yerele UYGULANDIYSA `true`.
+/// Yerel konum varken farklı ve daha yeni sunucu konumu uygulanmaz, öneri olarak saklanır.
 pub(crate) fn apply_progress(
     c: &Connection,
     book_id: i64,
     dto: &ProgressDto,
 ) -> Result<bool, CoreError> {
-    let local: Option<LocalProg> = c
+    let local: Option<(String, i64, bool, i64)> = c
         .query_row(
-            "SELECT updated_at, p_dirty, s_dirty FROM progress WHERE book_id = ?1",
+            "SELECT locator, updated_at, p_dirty <> 0 OR s_dirty <> 0, declined_ts
+             FROM progress WHERE book_id = ?1",
             [book_id],
-            |r| {
-                Ok(LocalProg {
-                    updated_at: r.get(0)?,
-                    pending: r.get::<_, i64>(1)? != 0 || r.get::<_, i64>(2)? != 0,
-                })
-            },
+            |r| Ok((r.get(0)?, r.get(1)?, r.get::<_, i64>(2)? != 0, r.get(3)?)),
         )
         .optional()?;
+    let local_prog = local.as_ref().map(|(_, upd, pending, _)| LocalProg {
+        updated_at: *upd,
+        pending: *pending,
+    });
     let srv = ServerProg {
         updated_at: dto.updated_at,
         has_row: !(dto.updated_at == 0 && dto.status == "unread" && dto.locator.is_empty()),
     };
-    match merge_progress(local.as_ref(), &srv) {
+    match merge_progress(local_prog.as_ref(), &srv) {
         Merge::KeepLocal => Ok(false),
         Merge::TakeServer => {
+            if let Some((loc, upd, _, declined)) = &local {
+                if suggest_instead(loc, *upd, dto) {
+                    if *declined != dto.updated_at {
+                        c.execute(
+                            "UPDATE progress SET remote_locator = ?2, remote_percent = ?3,
+                                    remote_status = ?4, remote_updated_at = ?5
+                             WHERE book_id = ?1",
+                            params![
+                                book_id,
+                                dto.locator,
+                                clamp01(dto.percent),
+                                ReadStatus::from_db(&dto.status).as_str(),
+                                dto.updated_at
+                            ],
+                        )?;
+                    }
+                    return Ok(false);
+                }
+            }
             c.execute(
                 "INSERT INTO progress(book_id, locator, percent, status, updated_at,
                                       p_dirty, s_dirty, last_op)
@@ -190,7 +218,9 @@ pub(crate) fn apply_progress(
                     percent = excluded.percent,
                     status = excluded.status,
                     updated_at = excluded.updated_at,
-                    p_dirty = 0, s_dirty = 0, last_op = ''",
+                    p_dirty = 0, s_dirty = 0, last_op = '',
+                    remote_locator = '', remote_percent = 0, remote_status = '',
+                    remote_updated_at = 0, declined_ts = 0",
                 params![
                     book_id,
                     dto.locator,
@@ -657,10 +687,72 @@ impl Core {
     /// Yalnız giden kuyruk; itilen işlem sayısı.
     pub fn sync_push(&self) -> Result<i32, CoreError> {
         let r = push(self);
-        if let Err(e) = &r {
-            record_error(self, e);
+        match &r {
+            Ok(_) => {
+                // gösterge "eşitlendi"ye dönebilsin
+                let now = self.now();
+                let _ = self.with_db(|c| {
+                    db::kv_set(c, "sync_last_ok_at", &now.to_string());
+                    db::kv_del(c, "sync_last_error");
+                    Ok(())
+                });
+            }
+            Err(e) => record_error(self, e),
         }
         r
+    }
+
+    /// Bekleyen "başka cihaz konumu" önerisi; yoksa None. Ağ yok.
+    pub fn position_suggestion(
+        &self,
+        book_id: i64,
+    ) -> Result<Option<PositionSuggestion>, CoreError> {
+        self.with_db(|c| {
+            Ok(c.query_row(
+                "SELECT remote_locator, remote_percent, remote_updated_at FROM progress
+                 WHERE book_id = ?1 AND remote_updated_at > 0 AND remote_updated_at > updated_at
+                   AND remote_updated_at > declined_ts AND remote_locator <> ''",
+                [book_id],
+                |r| {
+                    Ok(PositionSuggestion {
+                        locator: r.get(0)?,
+                        percent: r.get(1)?,
+                        updated_at: r.get(2)?,
+                    })
+                },
+            )
+            .optional()?)
+        })
+    }
+
+    /// "Oraya git": sunucu konumu yerele uygulanır, bayraklar ve öneri temizlenir.
+    pub fn accept_position(&self, book_id: i64) -> Result<(), CoreError> {
+        self.with_db(|c| {
+            c.execute(
+                "UPDATE progress SET locator = remote_locator, percent = remote_percent,
+                        status = CASE WHEN remote_status IN ('unread','reading','finished','dropped')
+                                      THEN remote_status ELSE status END,
+                        updated_at = remote_updated_at, p_dirty = 0, s_dirty = 0, last_op = '',
+                        remote_locator = '', remote_percent = 0, remote_status = '',
+                        remote_updated_at = 0, declined_ts = 0
+                 WHERE book_id = ?1 AND remote_updated_at > 0",
+                [book_id],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// "Burada kal": yerel konum korunur; aynı sunucu damgası için bir daha sorulmaz.
+    pub fn decline_position(&self, book_id: i64) -> Result<(), CoreError> {
+        self.with_db(|c| {
+            c.execute(
+                "UPDATE progress SET declined_ts = remote_updated_at, remote_locator = '',
+                        remote_percent = 0, remote_status = '', remote_updated_at = 0
+                 WHERE book_id = ?1 AND remote_updated_at > 0",
+                [book_id],
+            )?;
+            Ok(())
+        })
     }
 
     pub fn sync_status(&self) -> SyncStatus {
@@ -975,6 +1067,30 @@ mod tests {
         assert_eq!(merge_progress(Some(&lp(9, true)), &sp(5, true)), Merge::KeepLocal);
         // bekleyen değil -> sunucu
         assert_eq!(merge_progress(Some(&lp(9, false)), &sp(5, true)), Merge::TakeServer);
+    }
+
+    fn dto(locator: &str, updated_at: i64) -> ProgressDto {
+        ProgressDto {
+            locator: locator.to_string(),
+            percent: 0.5,
+            status: "reading".to_string(),
+            updated_at,
+        }
+    }
+
+    #[test]
+    fn suggest_instead_table() {
+        // yerel konum boş: sunucu sessizce alınır
+        assert!(!suggest_instead("", 10, &dto("9", 20)));
+        // sunucu konumu boş
+        assert!(!suggest_instead("5", 10, &dto("", 20)));
+        // eşit konum
+        assert!(!suggest_instead("5", 10, &dto("5", 20)));
+        // sunucu damgası eşit ya da eski
+        assert!(!suggest_instead("5", 10, &dto("9", 10)));
+        assert!(!suggest_instead("5", 10, &dto("9", 9)));
+        // farklı ve daha yeni
+        assert!(suggest_instead("5", 10, &dto("9", 11)));
     }
 
     #[test]

@@ -3,6 +3,7 @@ use std::{path::Path, time::Duration};
 use rusqlite::{Connection, OptionalExtension};
 
 const MIGRATION_0001: &str = include_str!("migrations/0001_init.sql");
+const MIGRATION_0002: &str = include_str!("migrations/0002_remote_pos.sql");
 
 pub fn open(path: &Path) -> rusqlite::Result<Connection> {
     if let Some(parent) = path.parent() {
@@ -20,6 +21,13 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
         let tx = conn.transaction()?;
         tx.execute_batch(MIGRATION_0001)?;
         tx.pragma_update(None, "user_version", 1)?;
+        tx.commit()?;
+    }
+    let uv: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if uv < 2 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(MIGRATION_0002)?;
+        tx.pragma_update(None, "user_version", 2)?;
         tx.commit()?;
     }
     Ok(conn)
@@ -75,6 +83,10 @@ mod tests {
         assert_eq!(kv_get(&conn, "a").as_deref(), Some("2"));
         kv_del(&conn, "a");
         assert_eq!(kv_get(&conn, "a"), None);
+        let uv: i32 = conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(uv, 2);
         // ikinci açılışta göç yeniden çalışmaz
         drop(conn);
         assert!(open(&dir.path().join("t.db")).is_ok());

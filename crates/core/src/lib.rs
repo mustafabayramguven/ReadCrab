@@ -6,6 +6,7 @@ mod error;
 mod http;
 mod library;
 mod reader;
+mod stats;
 mod sync;
 mod util;
 
@@ -214,6 +215,42 @@ pub struct StorageUsage {
     pub cache_bytes: i64,
     pub covers_bytes: i64,
     pub db_bytes: i64,
+}
+
+/// Başka cihazda kaydedilmiş, yerelden farklı ve daha yeni okuma konumu önerisi.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct PositionSuggestion {
+    pub locator: String,
+    pub percent: f64,
+    pub updated_at: i64,
+}
+
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct StatsDay {
+    pub date: String,
+    pub seconds: i64,
+    pub pages: i64,
+    pub qualified: bool,
+    pub frozen: bool,
+    pub in_current: bool,
+}
+
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct StatsSnapshot {
+    pub total_seconds: i64,
+    pub total_pages: i64,
+    pub finished_count: i64,
+    pub streak_current: i64,
+    pub streak_longest: i64,
+    pub streak_at_risk: bool,
+    pub today_seconds: i64,
+    pub streak_min_seconds: i64,
+    pub freeze_available: bool,
+    pub year: i32,
+    pub years: Vec<i32>,
+    pub days: Vec<StatsDay>,
+    pub fetched_at: i64, // sunucu saatine göre düzeltilmiş sn; önbellekten geliyorsa yazıldığı an
+    pub from_cache: bool,
 }
 
 #[derive(uniffi::Object)]

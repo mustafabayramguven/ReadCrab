@@ -254,21 +254,30 @@ fn stale_put_response_pulls_server_progress() {
         count(&mock, |r| r.method == "GET" && r.path == "/api/books/11/progress") >= 1,
         "applied=false sonrası sunucu ilerlemesi çekilmeli"
     );
+    // yerelde konum var, sunucununki farklı ve yeni: sessizce ezilmez, öneri olarak saklanır
+    assert_eq!(core.get_progress(11).unwrap().locator, "5");
+    let sug = core.position_suggestion(11).unwrap().expect("öneri");
+    assert_eq!(sug.locator, "9");
+    assert_eq!(core.sync_status().pending_ops, 0);
+
+    core.accept_position(11).unwrap();
     let p = core.get_progress(11).unwrap();
     assert_eq!(p.locator, "9");
     assert!((p.percent - 0.9).abs() < 1e-9);
-    assert_eq!(core.sync_status().pending_ops, 0);
+    assert!(core.position_suggestion(11).unwrap().is_none());
     mock.stop();
 }
 
 #[test]
-fn newer_server_progress_cancels_pending_local_op() {
-    let mock = Mock::start(|req: &Req| {
+fn newer_server_progress_is_suggested_and_local_op_kept() {
+    let server = Arc::new(Mutex::new(("8".to_string(), 4_000_000_000i64)));
+    let sv = server.clone();
+    let mock = Mock::start(move |req: &Req| {
         if req.method == "GET" && req.path == "/api/books/11/progress" {
+            let (loc, ts) = sv.lock().unwrap().clone();
             return json(
                 200,
-                &json!({"locator": "8", "percent": 0.8, "status": "reading",
-                        "updated_at": 4_000_000_000i64}),
+                &json!({"locator": loc, "percent": 0.8, "status": "reading", "updated_at": ts}),
             );
         }
         base_reply(req)
@@ -277,12 +286,86 @@ fn newer_server_progress_cancels_pending_local_op() {
     core.save_progress(11, "7".into(), 0.7, DATE.into()).unwrap();
     assert_eq!(core.sync_status().pending_ops, 1);
 
+    // yerel işlem korunur, sunucu konumu öneri olur
     core.pull_book(11).unwrap();
-    assert_eq!(core.get_progress(11).unwrap().locator, "8");
-    assert_eq!(core.sync_status().pending_ops, 0);
-    // itilecek bir şey kalmadı
-    assert_eq!(core.sync_push().unwrap(), 0);
-    assert_eq!(count(&mock, |r| r.method == "PUT"), 0);
+    assert_eq!(core.get_progress(11).unwrap().locator, "7");
+    assert_eq!(core.sync_status().pending_ops, 1);
+    assert_eq!(core.position_suggestion(11).unwrap().unwrap().locator, "8");
+
+    // "Burada kal": aynı sunucu damgası için bir daha sorulmaz
+    core.decline_position(11).unwrap();
+    assert!(core.position_suggestion(11).unwrap().is_none());
+    core.pull_book(11).unwrap();
+    assert!(core.position_suggestion(11).unwrap().is_none());
+    assert_eq!(core.get_progress(11).unwrap().locator, "7");
+
+    // sunucu daha da yeni bir damgayla başka konum verirse yeniden sorulur
+    *server.lock().unwrap() = ("6".to_string(), 4_000_000_010i64);
+    core.pull_book(11).unwrap();
+    assert_eq!(core.position_suggestion(11).unwrap().unwrap().locator, "6");
+    assert_eq!(core.get_progress(11).unwrap().locator, "7");
+    mock.stop();
+}
+
+#[test]
+fn no_local_position_takes_server_silently() {
+    let mock = Mock::start(|req: &Req| {
+        if req.method == "GET" && req.path == "/api/books/11/progress" {
+            return json(
+                200,
+                &json!({"locator": "9", "percent": 0.9, "status": "reading", "updated_at": 2000}),
+            );
+        }
+        base_reply(req)
+    });
+    let (_d, core) = logged_in(&mock);
+    core.pull_book(11).unwrap();
+    assert_eq!(core.get_progress(11).unwrap().locator, "9");
+    assert!(core.position_suggestion(11).unwrap().is_none());
+    mock.stop();
+}
+
+#[test]
+fn equal_locator_is_not_suggested() {
+    let mock = Mock::start(|req: &Req| {
+        if req.method == "GET" && req.path == "/api/books/11/progress" {
+            return json(
+                200,
+                &json!({"locator": "5", "percent": 1.0, "status": "finished",
+                        "updated_at": 4_000_000_000i64}),
+            );
+        }
+        base_reply(req)
+    });
+    let (_d, core) = logged_in(&mock);
+    core.save_progress(11, "5".into(), 0.5, DATE.into()).unwrap();
+    core.pull_book(11).unwrap();
+    assert!(core.position_suggestion(11).unwrap().is_none());
+    // yüzde ve durum sunucudan gelir
+    let p = core.get_progress(11).unwrap();
+    assert_eq!(p.locator, "5");
+    assert!((p.percent - 1.0).abs() < 1e-9);
+    assert_eq!(p.status, ReadStatus::Finished);
+    mock.stop();
+}
+
+#[test]
+fn push_success_clears_error_and_stamps_ok() {
+    let mock = Mock::start(base_reply);
+    let (_d, core) = logged_in(&mock);
+    let port = mock.port();
+    core.save_progress(11, "2".into(), 0.5, DATE.into()).unwrap();
+    mock.stop();
+
+    assert!(matches!(core.sync_push(), Err(CoreError::Network(_))));
+    assert!(core.sync_status().last_error.is_some());
+
+    let mock = Mock::start_on(port, base_reply);
+    assert_eq!(core.sync_push().unwrap(), 1);
+    let st = core.sync_status();
+    assert_eq!(st.last_error, None);
+    assert!(st.last_ok_at.is_some());
+    assert_eq!(st.pending_ops, 0);
     mock.stop();
 }
 
