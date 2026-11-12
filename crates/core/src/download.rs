@@ -38,6 +38,19 @@ impl Drop for RunGuard<'_> {
     }
 }
 
+/// `download_book` hangi yoldan dönerse dönsün (erken `?` dahil) kendi iptal işaretini temizler.
+struct CancelGuard<'a>(&'a Core, i64);
+
+impl Drop for CancelGuard<'_> {
+    fn drop(&mut self) {
+        self.0
+            .cancel
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.1);
+    }
+}
+
 enum Outcome {
     Done,
     Cancelled,
@@ -96,6 +109,7 @@ fn finish_running(
 }
 
 fn download_book(core: &Core, id: i64) -> Result<Outcome, CoreError> {
+    let _cancel = CancelGuard(core, id);
     let info: Option<(String, i64, i64)> = core.with_db(|c| {
         Ok(c.query_row(
             "SELECT format, page_count, cover_v FROM books WHERE id = ?1",
@@ -133,6 +147,9 @@ fn download_book(core: &Core, id: i64) -> Result<Outcome, CoreError> {
             toc.len() as i64
         }
     };
+    if total <= 0 {
+        return Err(CoreError::Server("İndirilecek içerik yok.".to_string()));
+    }
     if !core.root.join("covers").join(format!("{id}-{cover_v}.jpg")).exists() {
         let _ = reader::fetch_cover(core, id, cover_v); // hata yutulur
     }
@@ -237,6 +254,11 @@ impl Core {
                         state = 'queued', error = NULL, updated_at = excluded.updated_at",
                     params![id, now],
                 )?;
+                // eski bir iptal işareti yeni indirmeyi durdurmasın
+                self.cancel
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&id);
             }
             tx.commit()?;
             Ok(())
@@ -304,53 +326,16 @@ impl Core {
         }
         let _guard = RunGuard(&self.dl_running);
         self.stop.store(false, Ordering::SeqCst);
-
-        let mut finished = 0;
-        let mut failed = 0;
-        loop {
-            if self.stop.load(Ordering::SeqCst) {
-                break;
-            }
-            let next: Option<i64> = self.with_db(|c| {
-                Ok(c.query_row(
-                    "SELECT book_id FROM downloads WHERE state = 'queued'
-                     ORDER BY updated_at ASC, book_id ASC LIMIT 1",
-                    [],
-                    |r| r.get(0),
-                )
-                .optional()?)
-            })?;
-            let Some(id) = next else { break };
-            let now = self.now();
-            self.with_db(|c| {
-                c.execute(
-                    "UPDATE downloads SET state = 'running', error = NULL, updated_at = ?2
-                     WHERE book_id = ?1 AND state = 'queued'",
-                    params![id, now],
-                )?;
-                Ok(())
-            })?;
-            match download_book(self, id) {
-                Ok(Outcome::Done) => {
-                    finish_running(self, id, "done", None)?;
-                    finished += 1;
-                }
-                Ok(Outcome::Cancelled) => {}
-                Ok(Outcome::Stopped) => {
-                    finish_running(self, id, "queued", None)?;
-                    break;
-                }
-                Err(CoreError::Unauthorized) => {
-                    finish_running(self, id, "queued", None)?;
-                    return Err(CoreError::Unauthorized);
-                }
-                Err(e) => {
-                    finish_running(self, id, "failed", Some(&e.to_string()))?;
-                    failed += 1;
-                }
-            }
-        }
-        Ok(DownloadRun { finished, failed })
+        let r = self.run_loop();
+        // hangi yoldan çıkılırsa çıkılsın `running`de asılı satır kalmaz
+        let _ = self.with_db(|c| {
+            c.execute(
+                "UPDATE downloads SET state = 'queued' WHERE state = 'running'",
+                [],
+            )?;
+            Ok(())
+        });
+        r
     }
 
     /// Çalışan `run_downloads`'ı nazikçe durdurur (sıradaki parçadan önce).
@@ -415,6 +400,58 @@ impl Core {
         })?;
         library::remove_book_dirs(&self.root, &ids);
         Ok(bytes)
+    }
+}
+
+impl Core {
+    fn run_loop(&self) -> Result<DownloadRun, CoreError> {
+        let mut finished = 0;
+        let mut failed = 0;
+        loop {
+            if self.stop.load(Ordering::SeqCst) {
+                break;
+            }
+            let next: Option<i64> = self.with_db(|c| {
+                Ok(c.query_row(
+                    "SELECT book_id FROM downloads WHERE state = 'queued'
+                     ORDER BY updated_at ASC, book_id ASC LIMIT 1",
+                    [],
+                    |r| r.get(0),
+                )
+                .optional()?)
+            })?;
+            let Some(id) = next else { break };
+            let now = self.now();
+            self.with_db(|c| {
+                c.execute(
+                    "UPDATE downloads SET state = 'running', error = NULL, updated_at = ?2
+                     WHERE book_id = ?1 AND state = 'queued'",
+                    params![id, now],
+                )?;
+                Ok(())
+            })?;
+            match download_book(self, id) {
+                Ok(Outcome::Done) => {
+                    finish_running(self, id, "done", None)?;
+                    finished += 1;
+                }
+                // satır silindiyse etkisiz; hâlâ `running` ise kuyruğa döner (takılı kalmaz)
+                Ok(Outcome::Cancelled) => finish_running(self, id, "queued", None)?,
+                Ok(Outcome::Stopped) => {
+                    finish_running(self, id, "queued", None)?;
+                    break;
+                }
+                Err(CoreError::Unauthorized) => {
+                    finish_running(self, id, "queued", None)?;
+                    return Err(CoreError::Unauthorized);
+                }
+                Err(e) => {
+                    finish_running(self, id, "failed", Some(&e.to_string()))?;
+                    failed += 1;
+                }
+            }
+        }
+        Ok(DownloadRun { finished, failed })
     }
 }
 
@@ -567,6 +604,53 @@ mod tests {
         assert!(!core.root.join("books").join("2").exists());
         let u = core.storage_usage().unwrap();
         assert_eq!((u.downloads_bytes, u.cache_bytes), (10, 0));
+    }
+
+    fn has_cancel(core: &Core, id: i64) -> bool {
+        core.cancel.lock().unwrap().contains(&id)
+    }
+
+    #[test]
+    fn cancel_flag_is_cleared_on_early_exit_and_on_enqueue() {
+        let (_d, core) = new_core();
+        // sayfa sayısı 0 ve oturum yok: `download_book` erken `?` ile döner
+        core.with_db(|c| {
+            c.execute(
+                "INSERT INTO books(id, series_id, ord, title, folded_title, format, page_count, size)
+                 VALUES (1, 1, 0, 'K', 'k', 'cbz', 0, 10)",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        core.cancel.lock().unwrap().insert(1);
+        assert!(matches!(download_book(&core, 1), Err(CoreError::Unauthorized)));
+        assert!(!has_cancel(&core, 1));
+
+        // yeniden kuyruğa alma da işareti temizler
+        core.cancel.lock().unwrap().insert(1);
+        core.download_enqueue(vec![1]).unwrap();
+        assert!(!has_cancel(&core, 1));
+
+        // satır `running`de asılı kalmaz; sonraki çalıştırma da engellenmez
+        assert!(matches!(core.run_downloads(), Err(CoreError::Unauthorized)));
+        assert_eq!(state_of(&core, 1), DownloadState::Queued);
+        assert!(matches!(core.run_downloads(), Err(CoreError::Unauthorized)));
+    }
+
+    #[test]
+    fn stale_cancel_does_not_leave_row_running() {
+        let (_d, core) = new_core();
+        add_book(&core, 1, None); // 2 sayfa, ikisi de yerelde: ağ gerekmez
+        add_part(&core, 1, 0, 3);
+        add_part(&core, 1, 1, 3);
+        core.download_enqueue(vec![1]).unwrap();
+        // enqueue sonrası takılmış bir iptal işareti: ilk tur iptal sayılır, satır kuyruğa döner
+        core.cancel.lock().unwrap().insert(1);
+        let run = core.run_downloads().unwrap();
+        assert_eq!((run.finished, run.failed), (1, 0));
+        assert_eq!(state_of(&core, 1), DownloadState::Done);
+        assert!(core.cancel.lock().unwrap().is_empty());
     }
 
     #[test]

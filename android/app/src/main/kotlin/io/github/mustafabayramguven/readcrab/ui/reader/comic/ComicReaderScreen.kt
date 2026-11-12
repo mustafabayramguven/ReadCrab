@@ -94,7 +94,9 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -141,8 +143,26 @@ class ComicReaderViewModel(app: Application) : AndroidViewModel(app) {
     private var loadedFor = -1L
     private var loadJob: Job? = null
 
+    // Konum yazımı tek tüketicide sıralıdır: son yazan her zaman en son sayfadır.
+    private val saveRequests = MutableStateFlow<Int?>(null)
+    // yüklenen / en son kaydedilmesi istenen sayfa; kitabı yalnız açmak konum yazmaz
+    private var savedPage = -1
+
     init {
         viewModelScope.launch { rc.prefs.state.collect { p -> _state.update { it.copy(prefs = p) } } }
+        viewModelScope.launch(Dispatchers.IO) {
+            saveRequests.filterNotNull().collectLatest { page ->
+                val count = _state.value.pageCount.coerceAtLeast(1)
+                val percent = ((page + 1).toDouble() / count).coerceIn(0.0, 1.0)
+                runCatching { core.saveProgress(bookId, page.toString(), percent, LocalDate.now().toString()) }
+                    .onFailure { handleError(it) }
+            }
+        }
+    }
+
+    /** İçeriği yerelde olmayan bir sayfa 401 ile getirilemedi: oturum düşmüş. */
+    fun markSessionExpired() {
+        rc.prefs.update { it.copy(needsRelogin = true) }
     }
 
     fun onEvent(e: ComicEvent) {
@@ -198,6 +218,8 @@ class ComicReaderViewModel(app: Application) : AndroidViewModel(app) {
                 val page = core.getProgress(id).locator.toIntOrNull()?.takeIf { it in 0 until count } ?: 0
                 val mode = rc.prefs.comicModeFor(id)
                 val bookmarks = core.listBookmarks(id)
+                savedPage = page
+                saveRequests.value = null
                 tracker.start(id, (page + 1).toDouble() / count)
                 _state.update {
                     it.copy(
@@ -224,10 +246,9 @@ class ComicReaderViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(page = page) }
         tracker.addPage(page.toString())
         tracker.setPercent(percent)
-        val id = bookId
-        viewModelScope.launch(Dispatchers.IO) {
-            runCatching { core.saveProgress(id, page.toString(), percent, LocalDate.now().toString()) }
-                .onFailure { handleError(it) }
+        if (page != savedPage) {
+            savedPage = page
+            saveRequests.value = page
         }
     }
 
@@ -274,7 +295,6 @@ fun ComicReaderScreen(
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
     LaunchedEffect(bookId) { vm.onEvent(ComicEvent.Load(bookId)) }
-    LaunchedEffect(state.prefs.needsRelogin) { if (state.prefs.needsRelogin) onSessionExpired() }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         vm.tracker.foreground = true
         vm.tracker.touch()
@@ -301,7 +321,7 @@ fun ComicReaderScreen(
                 EmptyState(Icons.Outlined.ErrorOutline, error)
                 Button(onClick = { vm.onEvent(ComicEvent.Retry) }) { Text(stringResource(R.string.action_retry)) }
             }
-            else -> ComicBody(bookId, state, vm, stepper, onBack, onNextBook)
+            else -> ComicBody(bookId, state, vm, stepper, onBack, onNextBook, onSessionExpired)
         }
     }
 }
@@ -314,10 +334,16 @@ private fun ComicBody(
     stepper: StepHolder,
     onBack: (Long) -> Unit,
     onNextBook: (Long) -> Unit,
+    onSessionExpired: () -> Unit,
 ) {
+    // yalnız yerelde olmayan bir sayfa 401 ile getirilemezse oturum düşmüş sayılır
+    val onExpired: () -> Unit = {
+        vm.markSessionExpired()
+        onSessionExpired()
+    }
     Box(Modifier.fillMaxSize()) {
-        if (state.mode == "webtoon") WebtoonPages(bookId, state, vm, stepper)
-        else PagerPages(bookId, state, vm, stepper)
+        if (state.mode == "webtoon") WebtoonPages(bookId, state, vm, stepper, onExpired)
+        else PagerPages(bookId, state, vm, stepper, onExpired)
 
         AnimatedVisibility(
             visible = state.barsVisible,
@@ -369,7 +395,13 @@ private fun ComicBody(
 }
 
 @Composable
-private fun PagerPages(bookId: Long, state: ComicState, vm: ComicReaderViewModel, stepper: StepHolder) {
+private fun PagerPages(
+    bookId: Long,
+    state: ComicState,
+    vm: ComicReaderViewModel,
+    stepper: StepHolder,
+    onExpired: () -> Unit,
+) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val count = state.pageCount
@@ -433,13 +465,20 @@ private fun PagerPages(bookId: Long, state: ComicState, vm: ComicReaderViewModel
                 contentDescription = null,
                 contentScale = ContentScale.Fit,
                 modifier = Modifier.fillMaxSize(),
+                onError = { if (it.result.throwable is CoreException.Unauthorized) onExpired() },
             )
         }
     }
 }
 
 @Composable
-private fun WebtoonPages(bookId: Long, state: ComicState, vm: ComicReaderViewModel, stepper: StepHolder) {
+private fun WebtoonPages(
+    bookId: Long,
+    state: ComicState,
+    vm: ComicReaderViewModel,
+    stepper: StepHolder,
+    onExpired: () -> Unit,
+) {
     val scope = rememberCoroutineScope()
     val count = state.pageCount
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = state.page.coerceIn(0, count - 1))
@@ -472,6 +511,7 @@ private fun WebtoonPages(bookId: Long, state: ComicState, vm: ComicReaderViewMod
                 contentDescription = null,
                 contentScale = ContentScale.FillWidth,
                 modifier = Modifier.fillMaxWidth().heightIn(min = 320.dp),
+                onError = { if (it.result.throwable is CoreException.Unauthorized) onExpired() },
             )
         }
     }

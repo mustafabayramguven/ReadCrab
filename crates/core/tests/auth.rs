@@ -16,18 +16,12 @@ fn hdr<'a>(r: &'a Req, name: &str) -> Option<&'a str> {
         .map(|(_, v)| v.as_str())
 }
 
-// Pooled bağlantı kapanan sahte sunucuya takılıp beklemesin diye her yanıt bağlantıyı kapatır.
-fn close(mut r: Reply) -> Reply {
-    r.headers.push(("Connection".into(), "close".into()));
-    r
-}
-
 fn no_content() -> Reply {
-    close(Reply {
+    Reply {
         status: 204,
         headers: vec![],
         body: vec![],
-    })
+    }
 }
 
 /// Giriş + tek seri/tek kitap kütüphanesi. `unauthorized` açılınca kütüphane uçları 401 döner.
@@ -35,20 +29,20 @@ fn handler(unauthorized: Arc<AtomicBool>) -> impl Fn(&Req) -> Reply + Send + Syn
     move |req: &Req| {
         if is_login(req) {
             let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap_or_default();
-            return close(if body["password"] == "password1234" {
+            return if body["password"] == "password1234" {
                 login_ok()
             } else {
                 login_fail()
-            });
+            };
         }
         if req.method == "POST" && req.path == "/api/logout" {
             return no_content();
         }
         if unauthorized.load(Ordering::SeqCst) || !has_cookie(req) {
-            return close(login_fail());
+            return login_fail();
         }
         let p = req.path.as_str();
-        close(if p.starts_with("/api/series?") {
+        if p.starts_with("/api/series?") {
             json(
                 200,
                 &json!({"total": 1, "items": [{"id": 1, "name": "Alfa", "book_count": 1,
@@ -64,7 +58,7 @@ fn handler(unauthorized: Arc<AtomicBool>) -> impl Fn(&Req) -> Reply + Send + Syn
             )
         } else {
             json(404, &json!({"error": "not_found", "message": "Bulunamadı."}))
-        })
+        }
     }
 }
 
@@ -175,7 +169,6 @@ fn logout_wipes_even_when_server_is_gone() {
     core.login(mock.base.clone(), "admin".into(), "password1234".into())
         .unwrap();
     mock.stop();
-    std::thread::sleep(std::time::Duration::from_millis(300));
     core.logout().unwrap();
     assert!(core.session().is_none());
 }

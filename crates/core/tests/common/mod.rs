@@ -111,17 +111,32 @@ impl Mock {
         self.port
     }
 
-    // Dinleyiciyi kapatır (çevrimdışı simülasyonu).
+    // Dinleyiciyi kapatır (çevrimdışı simülasyonu). tiny_http `Server`'ı bırakınca dinleyici arka
+    // planda kapanır; port gerçekten bağlantı reddedene dek beklenir, zamanlayıcıya güvenilmez.
     pub fn stop(mut self) {
         self.stop_flag.store(true, Ordering::SeqCst);
         if let Some(h) = self.worker.take() {
             let _ = h.join();
         }
+        let port = self.port;
         drop(self.server);
+        wait_closed(port);
     }
 
     pub fn requests(&self) -> Vec<Req> {
         self.log.lock().unwrap().clone()
+    }
+}
+
+// Port bağlantı reddedene dek bekler (en çok 5 sn).
+pub fn wait_closed(port: u16) {
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        if std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_err() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
     }
 }
 

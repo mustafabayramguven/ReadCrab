@@ -253,15 +253,19 @@ pub(crate) fn remove_book_dirs(root: &Path, ids: &[i64]) {
 pub(crate) fn refresh(core: &Core) -> Result<i32, CoreError> {
     // 1. seri listesi
     let mut items: Vec<SeriesListDto> = Vec::new();
+    let mut total = 0;
     loop {
         let path = format!("/api/series?limit=200&offset={}&sort=name", items.len());
         let page: SeriesPageDto = core.http.get_json(&path).map_err(into_core)?;
         let got = page.items.len();
+        total = page.total;
         items.extend(page.items);
-        if got == 0 || items.len() as i64 >= page.total {
+        if got == 0 || items.len() as i64 >= total {
             break;
         }
     }
+    // erken boş sayfa: liste eksik toplandı; "silinmiş" çıkarımı yapılmaz, yalnız upsert
+    let complete = items.len() as i64 >= total;
 
     // 2-3. imzalar ve detayı çekilecek seriler
     let sigs: Vec<String> = items.iter().map(series_sig).collect();
@@ -322,7 +326,10 @@ pub(crate) fn refresh(core: &Core) -> Result<i32, CoreError> {
             let rows = st.query_map([], |r| r.get::<_, i64>(0))?;
             rows.collect::<rusqlite::Result<Vec<_>>>()?
         };
-        for sid in local_series.iter().filter(|s| !server_ids.contains(*s)) {
+        for sid in local_series
+            .iter()
+            .filter(|s| complete && !server_ids.contains(*s))
+        {
             let ids = book_ids_of_series(&tx, *sid)?;
             purge_books(&tx, &ids)?;
             tx.execute("DELETE FROM series WHERE id = ?1", [*sid])?;
@@ -353,14 +360,16 @@ pub(crate) fn refresh(core: &Core) -> Result<i32, CoreError> {
         for (sid, detail) in &fetched {
             let existing = book_ids_of_series(&tx, *sid)?;
             let Some(detail) = detail else {
-                purge_books(&tx, &existing)?;
-                removed.extend(existing);
+                if complete {
+                    purge_books(&tx, &existing)?;
+                    removed.extend(existing);
+                }
                 continue;
             };
             let new_ids: HashSet<i64> = detail.books.iter().map(|b| b.id).collect();
             let gone: Vec<i64> = existing
                 .into_iter()
-                .filter(|id| !new_ids.contains(id))
+                .filter(|id| complete && !new_ids.contains(id))
                 .collect();
             purge_books(&tx, &gone)?;
             removed.extend(gone);

@@ -248,12 +248,20 @@ impl Core {
         }
     }
 
+    /// Son görülen sunucu saati farkını `kv`'ye yazar (değiştiyse).
+    pub(crate) fn persist_offset(&self) {
+        let off = self.http.clock_offset().to_string();
+        let _ = self.with_db(|c| {
+            if db::kv_get(c, "clock_offset").as_deref() != Some(off.as_str()) {
+                db::kv_set(c, "clock_offset", &off);
+            }
+            Ok(())
+        });
+    }
+
     /// Tüm yerel veri: tablolar (kv dahil) + `books/` + `covers/`.
     pub(crate) fn wipe_local(&self) -> Result<(), CoreError> {
-        self.with_db(|c| {
-            db::wipe_all(c);
-            Ok(())
-        })?;
+        self.with_db(|c| Ok(db::wipe_all(c)?))?;
         for d in ["books", "covers"] {
             let p = self.root.join(d);
             let _ = std::fs::remove_dir_all(&p);
@@ -286,6 +294,10 @@ impl Core {
             [],
         )?;
         let http = http::Http::new();
+        // son bilinen sunucu saati farkı: çevrimdışı yazılan damgalar da düzeltilmiş olur
+        if let Some(off) = db::kv_get(&conn, "clock_offset").and_then(|v| v.parse::<i64>().ok()) {
+            http.set_offset(off);
+        }
         if let (Some(url), Some(token)) = (db::kv_get(&conn, "server_url"), db::kv_get(&conn, "token")) {
             http.set_session(&url, &token);
         }
@@ -333,6 +345,7 @@ impl Core {
             Ok(())
         })?;
         self.http.set_session(&base, &token);
+        self.persist_offset();
         Ok(SessionInfo {
             server_url: base,
             username: res.username,
@@ -348,7 +361,28 @@ impl Core {
             .send_json("POST", "/api/logout", &serde_json::json!({}));
         // çalışan indirme nazikçe dursun; sonraki run_downloads bayrağı sıfırlar
         self.stop.store(true, Ordering::SeqCst);
+        // silme başarısız olursa oturum da korunur (yarım çıkış olmaz)
+        self.wipe_local()?;
         self.http.clear_session();
-        self.wipe_local()
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clock_offset_survives_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_string_lossy().to_string();
+        let core = Core::new(path.clone()).unwrap();
+        core.http.set_offset(42);
+        core.persist_offset();
+        drop(core);
+        let core = Core::new(path).unwrap();
+        assert_eq!(core.http.clock_offset(), 42);
+        let skew = core.now() - util::sys_now();
+        assert!((41..=43).contains(&skew));
     }
 }

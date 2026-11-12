@@ -17,6 +17,7 @@ import androidx.work.WorkerParameters
 import io.github.mustafabayramguven.readcrab.R
 import io.github.mustafabayramguven.readcrab.RcApp
 import io.github.mustafabayramguven.readcrab.core.CoreException
+import io.github.mustafabayramguven.readcrab.core.DownloadState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -87,7 +88,10 @@ class DownloadWorker(ctx: Context, p: WorkerParameters) : CoroutineWorker(ctx, p
                     throw e
                 }
             }
-            Result.success()
+            // başka bir çalıştırma sürdüğü için hemen dönmüş ya da durdurulmuş olabilir: kuyrukta iş kaldıysa yeniden dene
+            val left = withContext(Dispatchers.IO) { core.downloadInfos() }
+                .any { it.state == DownloadState.QUEUED }
+            if (left) Result.retry() else Result.success()
         } catch (e: CoreException.Unauthorized) {
             app.prefs.update { it.copy(needsRelogin = true) }
             Result.failure()

@@ -12,6 +12,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -24,6 +25,8 @@ import androidx.compose.ui.unit.IntSize
 // Tek parmak ve scale == 1 iken olay tüketilmez, böylece HorizontalPager kaydırması çalışır.
 @Composable
 fun ZoomableBox(onTap: (Offset, IntSize) -> Unit, content: @Composable () -> Unit) {
+    // pointerInput(Unit) bloğu yeniden başlamaz: geri çağrı her zaman güncel olsun (ör. LTR/RTL değişimi)
+    val currentOnTap by rememberUpdatedState(onTap)
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
     var size by remember { mutableStateOf(IntSize.Zero) }
@@ -38,7 +41,7 @@ fun ZoomableBox(onTap: (Offset, IntSize) -> Unit, content: @Composable () -> Uni
             .onSizeChanged { size = it }
             .pointerInput(Unit) {
                 detectTapGestures(
-                    onTap = { onTap(it, size) },
+                    onTap = { currentOnTap(it, size) },
                     onDoubleTap = { p ->
                         if (scale > 1f) { scale = 1f; offset = Offset.Zero }
                         else {

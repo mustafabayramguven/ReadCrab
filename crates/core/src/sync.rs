@@ -616,6 +616,7 @@ pub(crate) fn push(core: &Core) -> Result<i32, CoreError> {
     push_bookmarks(core, &mut count)?;
     push_pings(core, &mut count)?;
     drop(guard);
+    core.persist_offset();
     // sunucu daha yeni olan kitaplar: hata yutulur (sonraki yenileme yine çeker)
     for id in pull {
         let _ = pull_progress(core, id, None);
@@ -628,6 +629,7 @@ fn sync_now_inner(core: &Core) -> Result<SyncReport, CoreError> {
     let pulled = library::refresh(core)?;
     pull_all_bookmarks(core)?;
     let pushed2 = push(core)?;
+    core.persist_offset();
     let now = core.now();
     core.with_db(|c| {
         db::kv_set(c, "sync_last_ok_at", &now.to_string());
@@ -739,14 +741,20 @@ impl Core {
         }
         let now = self.now();
         self.with_db(|c| {
-            let prev: Option<String> = c
+            let prev: Option<(String, String, f64)> = c
                 .query_row(
-                    "SELECT status FROM progress WHERE book_id = ?1",
+                    "SELECT status, locator, percent FROM progress WHERE book_id = ?1",
                     [book_id],
-                    |r| r.get(0),
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
                 )
                 .optional()?;
-            let status = derive_status(prev.as_deref(), percent);
+            // aynı konum yeniden bildirilirse (ör. kitabı yalnız açmak) damga ve kuyruk değişmez
+            if let Some((_, ref loc, pct)) = prev {
+                if *loc == locator && pct == percent {
+                    return Ok(());
+                }
+            }
+            let status = derive_status(prev.as_ref().map(|p| p.0.as_str()), percent);
             c.execute(
                 "INSERT INTO progress(book_id, locator, percent, status, updated_at,
                                       local_date, p_dirty, last_op)
@@ -1069,6 +1077,45 @@ mod tests {
         assert!(core.save_progress(1, "x".into(), 1.5, "d".into()).is_err());
         assert!(core.save_progress(1, "x".repeat(201), 0.5, "d".into()).is_err());
         assert_eq!(core.sync_status().pending_ops, 2);
+    }
+
+    #[test]
+    fn save_progress_same_position_is_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = Core::new(dir.path().to_string_lossy().to_string()).unwrap();
+        core.save_progress(1, "3".into(), 0.5, "2026-11-08".into()).unwrap();
+        // gönderilmiş gibi: bayrak temiz, damga eski
+        core.with_db(|c| {
+            c.execute("UPDATE progress SET p_dirty = 0, updated_at = 1000 WHERE book_id = 1", [])?;
+            Ok(())
+        })
+        .unwrap();
+        // aynı konum: hiçbir şey yazılmaz
+        core.save_progress(1, "3".into(), 0.5, "2026-11-09".into()).unwrap();
+        let row = |core: &Core| -> (i64, i64, String) {
+            core.with_db(|c| {
+                Ok(c.query_row(
+                    "SELECT updated_at, p_dirty, local_date FROM progress WHERE book_id = 1",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )?)
+            })
+            .unwrap()
+        };
+        assert_eq!(row(&core), (1000, 0, "2026-11-08".to_string()));
+        assert_eq!(core.sync_status().pending_ops, 0);
+        // farklı konum yazılır
+        core.save_progress(1, "4".into(), 0.6, "2026-11-09".into()).unwrap();
+        let (ts, dirty, date) = row(&core);
+        assert!(ts > 1000 && dirty == 1 && date == "2026-11-09");
+        // aynı locator, farklı yüzde de yazılır
+        core.with_db(|c| {
+            c.execute("UPDATE progress SET p_dirty = 0, updated_at = 1000 WHERE book_id = 1", [])?;
+            Ok(())
+        })
+        .unwrap();
+        core.save_progress(1, "4".into(), 0.7, "2026-11-09".into()).unwrap();
+        assert_eq!(row(&core).1, 1);
     }
 
     #[test]

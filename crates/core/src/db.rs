@@ -44,24 +44,21 @@ pub fn kv_del(conn: &Connection, key: &str) {
     let _ = conn.execute("DELETE FROM kv WHERE key = ?1", [key]);
 }
 
-/// Tüm tabloları boşaltır (kv dahil). Dosyaları `Core` siler.
-pub fn wipe_all(conn: &Connection) {
-    if let Ok(tx) = conn.unchecked_transaction() {
-        let done = tx.execute_batch(
-            "DELETE FROM kv;
-             DELETE FROM series;
-             DELETE FROM books;
-             DELETE FROM progress;
-             DELETE FROM bookmarks;
-             DELETE FROM pings;
-             DELETE FROM toc;
-             DELETE FROM downloads;
-             DELETE FROM parts;",
-        );
-        if done.is_ok() {
-            let _ = tx.commit();
-        }
-    }
+/// Tüm tabloları boşaltır (kv dahil). Dosyaları `Core` siler. Hata yukarı taşınır.
+pub fn wipe_all(conn: &Connection) -> rusqlite::Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch(
+        "DELETE FROM kv;
+         DELETE FROM series;
+         DELETE FROM books;
+         DELETE FROM progress;
+         DELETE FROM bookmarks;
+         DELETE FROM pings;
+         DELETE FROM toc;
+         DELETE FROM downloads;
+         DELETE FROM parts;",
+    )?;
+    tx.commit()
 }
 
 #[cfg(test)]
@@ -90,7 +87,7 @@ mod tests {
         kv_set(&conn, "token", "x");
         conn.execute("INSERT INTO series(id, ord, name, folded_name) VALUES (1, 0, 'A', 'a')", [])
             .unwrap();
-        wipe_all(&conn);
+        wipe_all(&conn).unwrap();
         assert_eq!(kv_get(&conn, "token"), None);
         let n: i64 = conn
             .query_row("SELECT COUNT(*) FROM series", [], |r| r.get(0))

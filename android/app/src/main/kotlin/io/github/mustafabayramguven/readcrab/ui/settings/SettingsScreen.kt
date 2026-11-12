@@ -154,8 +154,15 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     private fun logout() {
         _state.update { it.copy(confirmLogout = false) }
         viewModelScope.launch(Dispatchers.IO) {
-            rc.core.logout()
+            // önce işler ve çalışan indirme durdurulur, sonra yerel veri silinir
             Scheduler.cancelAll(getApplication<Application>())
+            rc.core.downloadStop()
+            try {
+                rc.core.logout()
+            } catch (e: CoreException) {
+                _state.update { it.copy(message = e.message) }
+                return@launch
+            }
             rc.downloads.refresh()
             _effects.emit(SettingsEffect.LoggedOut)
         }

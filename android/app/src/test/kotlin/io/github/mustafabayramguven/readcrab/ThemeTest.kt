@@ -14,7 +14,7 @@ class ThemeTest {
         listOf(
             s.background, s.surface, s.surfaceDim, s.surfaceBright, s.surfaceVariant,
             s.surfaceContainerLowest, s.surfaceContainerLow, s.surfaceContainer,
-            s.surfaceContainerHigh, s.surfaceContainerHighest,
+            s.surfaceContainerHigh, s.surfaceContainerHighest, s.surfaceTint,
         ).forEach { assertEquals(Color.Black, it) }
     }
 

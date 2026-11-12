@@ -208,6 +208,12 @@ class TextReaderViewModel(app: Application) : AndroidViewModel(app) {
     private var saveJob: Job? = null
     private var searchJob: Job? = null
     private var pendingSave: PendingSave? = null
+    // yüklenen / en son kaydedilen konum; kitabı yalnız açmak (ilk `pos`) konum yazmaz
+    private var savedLoc: Pair<Int, Double>? = null
+
+    // içeriği yerelde olmayan bir bölüm 401 ile getirilemedi: oturum düşmüş
+    private val _sessionExpired = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val sessionExpired: SharedFlow<Unit> = _sessionExpired.asSharedFlow()
 
     init {
         viewModelScope.launch {
@@ -282,6 +288,7 @@ class TextReaderViewModel(app: Application) : AndroidViewModel(app) {
                 val ratio = if (saved != null && saved.first == ch) saved.second.coerceIn(0.0, 1.0) else 0.0
                 val bookmarks = core.listBookmarks(id)
                 val percent = ((ch + ratio) / info.chapterCount).coerceIn(0.0, 1.0)
+                savedLoc = ch to ratio
                 tracker.start(id, percent)
                 _state.update {
                     it.copy(
@@ -331,6 +338,10 @@ class TextReaderViewModel(app: Application) : AndroidViewModel(app) {
                 throw e
             } catch (e: CoreException.Offline) {
                 _state.update { it.copy(loading = false, error = rc.getString(R.string.reader_error)) }
+            } catch (e: CoreException.Unauthorized) {
+                handleError(e)
+                _state.update { it.copy(loading = false, error = e.message ?: rc.getString(R.string.reader_error)) }
+                _sessionExpired.tryEmit(Unit)
             } catch (e: Exception) {
                 handleError(e)
                 _state.update { it.copy(loading = false, error = e.message ?: rc.getString(R.string.reader_error)) }
@@ -381,6 +392,11 @@ class TextReaderViewModel(app: Application) : AndroidViewModel(app) {
                     (if (paged) page >= pg - 1 else ratio >= 0.98),
             )
         }
+        // paged modda sayfa sınırına oturma, kaydırmada piksel yuvarlaması konumu hafifçe oynatır
+        val tol = if (paged) 0.5 / max(pg - 1, 1) + 1e-6 else 0.005
+        val loc = savedLoc
+        if (loc != null && loc.first == ch && abs(loc.second - ratio) <= tol) return
+        savedLoc = ch to ratio
         pendingSave = PendingSave(bookId, locatorOf(ch, ratio), percent)
         saveJob?.cancel()
         saveJob = viewModelScope.launch {
@@ -500,7 +516,7 @@ fun TextReaderScreen(
     val systemDark = isSystemInDarkTheme()
     LaunchedEffect(bookId) { vm.onEvent(TextEvent.Load(bookId)) }
     LaunchedEffect(systemDark) { vm.onSystemDark(systemDark) }
-    LaunchedEffect(state.prefs.needsRelogin) { if (state.prefs.needsRelogin) onSessionExpired() }
+    LaunchedEffect(Unit) { vm.sessionExpired.collect { onSessionExpired() } }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         vm.tracker.foreground = true
         vm.tracker.touch()

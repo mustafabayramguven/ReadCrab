@@ -67,7 +67,7 @@ fun amoled(s: ColorScheme): ColorScheme = s.copy(
     surfaceBright = Color.Black, surfaceVariant = Color.Black,
     surfaceContainerLowest = Color.Black, surfaceContainerLow = Color.Black,
     surfaceContainer = Color.Black, surfaceContainerHigh = Color.Black,
-    surfaceContainerHighest = Color.Black,
+    surfaceContainerHighest = Color.Black, surfaceTint = Color.Black,
     outlineVariant = Color(0xFF3A363E), // siyah yüzeyde kart/ayırıcı çizgisi görünsün
 )
 

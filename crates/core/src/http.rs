@@ -57,7 +57,10 @@ pub struct Http {
 
 impl Http {
     pub fn new() -> Http {
+        // Bağlantı havuzu kapalı: ureq havuza dönen akışın okuma zaman aşımını sıfırlar (Stream::reset)
+        // ve yeniden kullanımda geri koymaz; yanıt vermeyen (yarı ölü) bir akışta istek sonsuza dek asılırdı.
         let agent = ureq::AgentBuilder::new()
+            .max_idle_connections(0)
             .timeout_connect(Duration::from_secs(8))
             .timeout_read(Duration::from_secs(30))
             .timeout_write(Duration::from_secs(30))
@@ -83,6 +86,10 @@ impl Http {
 
     pub fn clock_offset(&self) -> i64 {
         self.offset.load(Ordering::Relaxed)
+    }
+
+    pub fn set_offset(&self, v: i64) {
+        self.offset.store(v, Ordering::Relaxed);
     }
 
     fn note_date(&self, resp: &ureq::Response) {

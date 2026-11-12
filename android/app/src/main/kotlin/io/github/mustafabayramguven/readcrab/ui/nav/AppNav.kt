@@ -16,6 +16,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import io.github.mustafabayramguven.readcrab.RcApp
@@ -32,14 +33,17 @@ import kotlinx.coroutines.withContext
 fun AppNav(app: RcApp) {
     val nav = rememberNavController()
     val prefs by app.prefs.state.collectAsStateWithLifecycle()
-    val start = remember {
-        if (app.core.session() == null || app.prefs.state.value.needsRelogin) "giris" else "kutuphane"
-    }
+    val start = remember { if (app.core.session() == null) "giris" else "kutuphane" }
     val toLogin: () -> Unit = { nav.navigate("giris") { popUpTo(0) } }
-    // oturum başka yerde (işçi, ekran) düşünce her yerden girişe dön
-    LaunchedEffect(prefs.needsRelogin) {
+    // oturum düştüyse girişe yalnız çevrimiçiyken ve okuyucuda değilken dönülür (çevrimdışı okuma sürer)
+    val sessionExpired: () -> Unit = {
         val route = nav.currentDestination?.route
-        if (prefs.needsRelogin && route != null && route != "giris") toLogin()
+        if (app.connectivity.online.value && route != null && route != "giris" && !route.startsWith("oku/")) toLogin()
+    }
+    val online by app.connectivity.online.collectAsStateWithLifecycle()
+    val entry by nav.currentBackStackEntryAsState()
+    LaunchedEffect(prefs.needsRelogin, online, entry?.destination?.route) {
+        if (prefs.needsRelogin) sessionExpired()
     }
     // okuyucudan geri: yığın boşsa kütüphaneye; seriesId kullanılmaz
     val readerBack: (Long) -> Unit = { _ ->
@@ -62,7 +66,7 @@ fun AppNav(app: RcApp) {
                 onOpenSeries = { id -> nav.navigate("seri/$id") },
                 onOpenBook = { id -> nav.navigate("oku/$id") },
                 onOpenSettings = { nav.navigate("ayarlar") },
-                onSessionExpired = toLogin,
+                onSessionExpired = sessionExpired,
             )
         }
         composable(
@@ -73,7 +77,7 @@ fun AppNav(app: RcApp) {
                 seriesId = entry.arguments!!.getLong("seriesId"),
                 onBack = { nav.popBackStack() },
                 onOpenBook = { id -> nav.navigate("oku/$id") },
-                onSessionExpired = toLogin,
+                onSessionExpired = sessionExpired,
             )
         }
         composable(
@@ -92,7 +96,7 @@ fun AppNav(app: RcApp) {
             SettingsScreen(
                 onBack = { nav.popBackStack() },
                 onLoggedOut = toLogin,
-                onSessionExpired = toLogin,
+                onSessionExpired = sessionExpired,
             )
         }
     }

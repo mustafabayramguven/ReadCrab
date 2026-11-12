@@ -14,11 +14,6 @@ use readcrab_core::{Core, CoreError, DownloadState};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-fn close(mut r: Reply) -> Reply {
-    r.headers.push(("Connection".into(), "close".into()));
-    r
-}
-
 fn count(mock: &Mock, f: impl Fn(&Req) -> bool) -> usize {
     mock.requests().iter().filter(|r| f(r)).count()
 }
@@ -37,12 +32,12 @@ fn page_index(req: &Req) -> Option<(i64, usize)> {
 fn library(req: &Req, p11: i64) -> Option<Reply> {
     let p = req.path.as_str();
     if is_login(req) {
-        return Some(close(login_ok()));
+        return Some(login_ok());
     }
     if !has_cookie(req) {
-        return Some(close(login_fail()));
+        return Some(login_fail());
     }
-    Some(close(if req.method == "GET" && p.starts_with("/api/series?") {
+    Some(if req.method == "GET" && p.starts_with("/api/series?") {
         json(
             200,
             &json!({"total": 1, "items": [{"id": 1, "name": "Alfa", "book_count": 3,
@@ -62,14 +57,14 @@ fn library(req: &Req, p11: i64) -> Option<Reply> {
         )
     } else {
         return None;
-    }))
+    })
 }
 
 fn not_found() -> Reply {
-    close(json(
+    json(
         404,
         &json!({"error": "not_found", "message": "Bulunamadı."}),
-    ))
+    )
 }
 
 fn synced(mock: &Mock) -> (tempfile::TempDir, Arc<Core>) {
@@ -89,10 +84,9 @@ fn info(core: &Core, id: i64) -> readcrab_core::DownloadInfo {
         .expect("indirme satırı")
 }
 
+// `stop()` port bağlantı reddedene dek bekler
 fn offline(mock: Mock) {
     mock.stop();
-    // dinleyicinin gerçekten kapanması için kısa bekleme
-    std::thread::sleep(Duration::from_millis(300));
 }
 
 fn comic_handler(req: &Req) -> Reply {
@@ -100,10 +94,10 @@ fn comic_handler(req: &Req) -> Reply {
         return r;
     }
     if let Some((_, n)) = page_index(req) {
-        return close(bytes(200, "image/png", page_bytes(n)));
+        return bytes(200, "image/png", page_bytes(n));
     }
     if req.path == "/api/books/11/cover" {
-        return close(bytes(200, "image/jpeg", vec![1; 20]));
+        return bytes(200, "image/jpeg", vec![1; 20]);
     }
     not_found()
 }
@@ -184,15 +178,15 @@ fn text_download_rewrites_chapter_images() {
             return r;
         }
         match req.path.as_str() {
-            "/api/books/7/toc" => close(json(
+            "/api/books/7/toc" => json(
                 200,
                 &json!({"chapters": [{"index": 0, "title": "Giriş"}]}),
-            )),
+            ),
             "/api/books/7/chapters/0" => {
-                close(bytes(200, "text/html; charset=utf-8", DOC.as_bytes().to_vec()))
+                bytes(200, "text/html; charset=utf-8", DOC.as_bytes().to_vec())
             }
             "/api/books/7/asset?p=OEBPS%2Fimg%2Fa%2Epng" => {
-                close(bytes(200, "image/png", vec![9; 5]))
+                bytes(200, "image/png", vec![9; 5])
             }
             _ => not_found(),
         }
@@ -317,7 +311,7 @@ fn download_stop_halts_run_and_requeues() {
         }
         if page_index(req).is_some() {
             std::thread::sleep(Duration::from_millis(200));
-            return close(bytes(200, "image/png", vec![1; 4]));
+            return bytes(200, "image/png", vec![1; 4]);
         }
         not_found()
     });
@@ -347,11 +341,37 @@ fn unauthorized_download_requeues_and_errors() {
         if let Some(r) = library(req, 3) {
             return r;
         }
-        close(login_fail())
+        login_fail()
     });
     let (_d, core) = synced(&mock);
     core.download_enqueue(vec![11]).unwrap();
     assert!(matches!(core.run_downloads(), Err(CoreError::Unauthorized)));
     assert_eq!(info(&core, 11).state, DownloadState::Queued);
+    mock.stop();
+}
+
+#[test]
+fn text_book_without_chapters_fails_instead_of_done() {
+    let mock = Mock::start(|req: &Req| {
+        if req.path == "/api/series/1" && has_cookie(req) {
+            return json(
+                200,
+                &json!({"id": 1, "name": "Alfa", "books": [
+                    {"id": 8, "title": "Boş", "format": "epub", "page_count": 0, "size": 1,
+                     "error": null, "status": "unread", "percent": 0.0, "cover_v": 1}]}),
+            );
+        }
+        if req.path == "/api/books/8/toc" {
+            return json(200, &json!({"chapters": []}));
+        }
+        library(req, 3).unwrap_or_else(not_found)
+    });
+    let (_d, core) = synced(&mock);
+    core.download_enqueue(vec![8]).unwrap();
+    let run = core.run_downloads().unwrap();
+    assert_eq!((run.finished, run.failed), (0, 1));
+    let i = info(&core, 8);
+    assert_eq!(i.state, DownloadState::Failed);
+    assert!(i.error.unwrap().contains("içerik"));
     mock.stop();
 }

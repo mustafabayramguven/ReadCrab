@@ -1,6 +1,9 @@
 mod common;
 
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicU8, Ordering},
+    Arc, Mutex,
+};
 
 use common::*;
 use readcrab_core::{Core, CoreError, ReadStatus};
@@ -8,17 +11,12 @@ use serde_json::{json, Value};
 
 const DATE: &str = "2026-11-08";
 
-fn close(mut r: Reply) -> Reply {
-    r.headers.push(("Connection".into(), "close".into()));
-    r
-}
-
 fn no_content() -> Reply {
-    close(Reply {
+    Reply {
         status: 204,
         headers: vec![],
         body: vec![],
-    })
+    }
 }
 
 fn body_of(r: &Req) -> Value {
@@ -48,12 +46,12 @@ fn now_secs() -> i64 {
 fn base_reply(req: &Req) -> Reply {
     let p = req.path.as_str();
     if is_login(req) {
-        return close(login_ok());
+        return login_ok();
     }
     if !has_cookie(req) {
-        return close(login_fail());
+        return login_fail();
     }
-    close(if req.method == "GET" && p.starts_with("/api/series?") {
+    if req.method == "GET" && p.starts_with("/api/series?") {
         json(
             200,
             &json!({"total": 2, "items": [
@@ -96,7 +94,7 @@ fn base_reply(req: &Req) -> Reply {
         no_content()
     } else {
         json(404, &json!({"error": "not_found", "message": "Bulunamadı."}))
-    })
+    }
 }
 
 fn logged_in(mock: &Mock) -> (tempfile::TempDir, Arc<Core>) {
@@ -184,8 +182,6 @@ fn offline_queue_survives_and_is_pushed_when_server_returns() {
     let (_d, core) = logged_in(&mock);
     let port = mock.port();
     mock.stop();
-    // dinleyicinin gerçekten kapanması için kısa bekleme (çevrimdışı simülasyonu)
-    std::thread::sleep(std::time::Duration::from_millis(300));
 
     core.save_progress(11, "2".into(), 0.5, DATE.into()).unwrap();
     core.set_status(11, ReadStatus::Reading, DATE.into()).unwrap();
@@ -205,10 +201,10 @@ fn offline_queue_survives_and_is_pushed_when_server_returns() {
     let mock = Mock::start_on(port, move |req: &Req| {
         if req.method == "POST" && req.path == "/api/books/11/bookmarks" {
             p.lock().unwrap().push("bookmark".into());
-            return close(json(
+            return json(
                 201,
                 &json!({"id": 5, "locator": "2", "label": "Sayfa 3", "created_at": 1}),
-            ));
+            );
         }
         base_reply(req)
     });
@@ -235,18 +231,18 @@ fn offline_queue_survives_and_is_pushed_when_server_returns() {
 fn stale_put_response_pulls_server_progress() {
     let mock = Mock::start(|req: &Req| {
         if req.method == "PUT" && req.path == "/api/books/11/progress" {
-            return close(json(
+            return json(
                 200,
                 &json!({"status": "reading", "percent": 0.9, "applied": false,
                         "updated_at": 4_000_000_000i64}),
-            ));
+            );
         }
         if req.method == "GET" && req.path == "/api/books/11/progress" {
-            return close(json(
+            return json(
                 200,
                 &json!({"locator": "9", "percent": 0.9, "status": "reading",
                         "updated_at": 4_000_000_000i64}),
-            ));
+            );
         }
         base_reply(req)
     });
@@ -269,11 +265,11 @@ fn stale_put_response_pulls_server_progress() {
 fn newer_server_progress_cancels_pending_local_op() {
     let mock = Mock::start(|req: &Req| {
         if req.method == "GET" && req.path == "/api/books/11/progress" {
-            return close(json(
+            return json(
                 200,
                 &json!({"locator": "8", "percent": 0.8, "status": "reading",
                         "updated_at": 4_000_000_000i64}),
-            ));
+            );
         }
         base_reply(req)
     });
@@ -294,10 +290,10 @@ fn newer_server_progress_cancels_pending_local_op() {
 fn newer_local_progress_is_kept_and_pushed() {
     let mock = Mock::start(|req: &Req| {
         if req.method == "GET" && req.path == "/api/books/11/progress" {
-            return close(json(
+            return json(
                 200,
                 &json!({"locator": "1", "percent": 0.1, "status": "reading", "updated_at": 1000}),
-            ));
+            );
         }
         base_reply(req)
     });
@@ -330,7 +326,7 @@ fn bookmarks_roundtrip_with_server() {
             let item = json!({"id": id, "locator": b["locator"], "label": b["label"],
                               "created_at": 5});
             list.push(item.clone());
-            return close(json(201, &item));
+            return json(201, &item);
         }
         if req.method == "DELETE" && req.path.starts_with("/api/bookmarks/") {
             let id: i64 = req.path.rsplit('/').next().unwrap().parse().unwrap();
@@ -338,7 +334,7 @@ fn bookmarks_roundtrip_with_server() {
             return no_content();
         }
         if req.method == "GET" && req.path == "/api/books/11/bookmarks" {
-            return close(json(200, &json!({ "items": *list })));
+            return json(200, &json!({ "items": *list }));
         }
         drop(list);
         base_reply(req)
@@ -465,7 +461,7 @@ fn permanent_put_errors_drop_the_op_but_server_errors_keep_it() {
     let mock = Mock::start(move |req: &Req| {
         if req.method == "PUT" && req.path == "/api/books/11/progress" {
             let code = *f.lock().unwrap();
-            return close(json(code, &json!({"error": "x", "message": "hata"})));
+            return json(code, &json!({"error": "x", "message": "hata"}));
         }
         base_reply(req)
     });
@@ -481,5 +477,49 @@ fn permanent_put_errors_drop_the_op_but_server_errors_keep_it() {
     *fail.lock().unwrap() = 500;
     assert!(matches!(core.sync_push(), Err(CoreError::Server(_))));
     assert_eq!(core.sync_status().pending_ops, 1);
+    mock.stop();
+}
+
+#[test]
+fn incomplete_listing_does_not_purge_local_series() {
+    // 0: tam liste, 1: eksik liste (erken boş sayfa), 2: Beta sunucuda gerçekten silindi
+    let mode = Arc::new(AtomicU8::new(0));
+    let m = mode.clone();
+    let mock = Mock::start(move |req: &Req| {
+        if req.method == "GET" && req.path.starts_with("/api/series?") && has_cookie(req) {
+            let alfa = json!({"id": 1, "name": "Alfa", "book_count": 2, "read_count": 0,
+                "reading_count": 1, "percent": 0.25, "cover_book_id": 11, "cover_v": 1,
+                "last_read_at": 1000});
+            match m.load(Ordering::SeqCst) {
+                1 => {
+                    let items = if req.path.contains("offset=0") {
+                        vec![alfa]
+                    } else {
+                        vec![]
+                    };
+                    return json(200, &json!({"total": 2, "items": items}));
+                }
+                2 => return json(200, &json!({"total": 1, "items": [alfa]})),
+                _ => {}
+            }
+        }
+        base_reply(req)
+    });
+    let (_d, core) = logged_in(&mock);
+    core.sync_now().unwrap();
+    assert_eq!(core.list_series(String::new(), false).unwrap().len(), 2);
+
+    // toplanan öğe sayısı total'dan az: yalnız upsert, hiçbir şey silinmez
+    mode.store(1, Ordering::SeqCst);
+    core.sync_now().unwrap();
+    assert_eq!(core.list_series(String::new(), false).unwrap().len(), 2);
+    assert_eq!(core.get_series(2).unwrap().books.len(), 1);
+
+    // tam liste Beta'yı içermiyorsa gerçekten silinmiştir
+    mode.store(2, Ordering::SeqCst);
+    core.sync_now().unwrap();
+    let left = core.list_series(String::new(), false).unwrap();
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].name, "Alfa");
     mock.stop();
 }
