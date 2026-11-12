@@ -591,7 +591,10 @@ async fn stats_streaks_and_daily() {
     assert_eq!(res.status(), StatusCode::OK);
     let stats = body_json(res).await;
 
-    assert_eq!(stats["total_seconds"], 300 + 400 + 500 + 299 + 150 + 160 + 350);
+    assert_eq!(
+        stats["total_seconds"],
+        300 + 400 + 500 + 299 + 150 + 160 + 350
+    );
     assert_eq!(stats["total_pages"], 2 + 3 + 4 + 1 + 1 + 2 + 5);
     assert_eq!(stats["streak_longest"], 3);
     assert_eq!(stats["streak_current"], 2);

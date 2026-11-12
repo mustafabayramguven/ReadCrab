@@ -203,7 +203,9 @@ async fn heatmap_marks_qualified_frozen_in_current() {
     // today olmadan zincir ölü sayılır: in_current hep false, donmuş gün yine işaretli
     let (_, v) = call(&app, "GET", "/api/stats/heatmap?year=2026", &admin, None).await;
     let days = v["days"].as_array().unwrap();
-    assert!(days.iter().all(|d| d["in_current"].as_bool() == Some(false)));
+    assert!(days
+        .iter()
+        .all(|d| d["in_current"].as_bool() == Some(false)));
     assert_eq!(heat_day(days, "2026-11-04")["frozen"], true);
 
     // geçersiz today

@@ -410,8 +410,8 @@ private fun HeatmapCard(
     val readDays = snap.days.count { it.seconds > 0 }
     val dayStat = snap.days.associateBy { it.date }
 
-    val widthDp = LEFT + grid.cols * CELL + (grid.cols - 1) * GAP
-    val heightDp = TOP + 7 * CELL + 6 * GAP + GAP
+    val widthDp = LEFT + CELL * grid.cols + GAP * (grid.cols - 1)
+    val heightDp = TOP + CELL * 7 + GAP * 7
 
     val scroll = rememberScrollState()
     var viewport by remember { mutableIntStateOf(0) }
