@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -11,7 +12,6 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -122,7 +122,7 @@ private fun ReaderRoute(
         }
     }
     when (kind) {
-        0 -> Box(Modifier.fillMaxSize().background(Color.Black), Alignment.Center) { CircularProgressIndicator() }
+        0 -> Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface), Alignment.Center) { CircularProgressIndicator() }
         1 -> ComicReaderScreen(bookId = bookId, onBack = onBack, onNextBook = onNextBook, onSessionExpired = onSessionExpired)
         2 -> TextReaderScreen(bookId = bookId, onBack = onBack, onNextBook = onNextBook, onSessionExpired = onSessionExpired)
         else -> LaunchedEffect(Unit) { onBack(0L) }

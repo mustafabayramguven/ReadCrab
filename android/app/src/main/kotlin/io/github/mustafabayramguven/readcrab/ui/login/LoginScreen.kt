@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -134,6 +135,7 @@ fun LoginScreen(onLoggedIn: () -> Unit, vm: LoginViewModel = viewModel()) {
     Column(
         Modifier
             .fillMaxSize()
+            .safeDrawingPadding() // kenar-kenara: durum çubuğu, çentik, klavye
             .verticalScroll(rememberScrollState())
             .padding(horizontal = Dimens.gutter, vertical = Dimens.s5),
         horizontalAlignment = Alignment.CenterHorizontally,
