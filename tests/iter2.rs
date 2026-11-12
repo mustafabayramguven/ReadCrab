@@ -150,6 +150,91 @@ async fn heatmap_isolated_per_user() {
     }
 }
 
+fn heat_day<'a>(days: &'a [serde_json::Value], date: &str) -> &'a serde_json::Value {
+    days.iter().find(|d| d["date"] == date).unwrap()
+}
+
+fn session_sql(book: i64, n: u32, secs: i64, date: &str) -> String {
+    format!(
+        "INSERT INTO reading_sessions(user_id,book_id,client_id,started_at,ended_at,active_seconds,pages_read,start_percent,end_percent,local_date)
+         VALUES(1,{book},'{n:032}',1,2,{secs},3,0,0,'{date}');"
+    )
+}
+
+#[tokio::test]
+async fn heatmap_marks_qualified_frozen_in_current() {
+    let (app, dirs) = test_app().await;
+    let admin = login_as_admin(&app).await;
+    let b = seed_books(&dirs, "S", 1).await[0];
+    let sql = [
+        session_sql(b, 1, 300, "2026-11-03"),
+        session_sql(b, 2, 400, "2026-11-05"),
+        session_sql(b, 3, 100, "2026-11-06"),
+    ]
+    .concat();
+    exec(&dirs, sql).await;
+
+    let uri = "/api/stats/heatmap?year=2026&today=2026-11-05";
+    let (st, v) = call(&app, "GET", uri, &admin, None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(v["streak_min_seconds"], 300);
+    let days = v["days"].as_array().unwrap();
+    assert_eq!(days.len(), 4);
+    let d = heat_day(days, "2026-11-03");
+    assert_eq!(d["seconds"], 300);
+    assert_eq!(d["qualified"], true);
+    assert_eq!(d["frozen"], false);
+    assert_eq!(d["in_current"], true);
+    let d = heat_day(days, "2026-11-04");
+    assert_eq!(d["seconds"], 0);
+    assert_eq!(d["pages"], 0);
+    assert_eq!(d["qualified"], false);
+    assert_eq!(d["frozen"], true);
+    assert_eq!(d["in_current"], true);
+    let d = heat_day(days, "2026-11-05");
+    assert_eq!(d["qualified"], true);
+    assert_eq!(d["in_current"], true);
+    let d = heat_day(days, "2026-11-06");
+    assert_eq!(d["seconds"], 100);
+    assert_eq!(d["qualified"], false);
+    assert_eq!(d["frozen"], false);
+    assert_eq!(d["in_current"], false);
+
+    // today olmadan zincir ölü sayılır: in_current hep false, donmuş gün yine işaretli
+    let (_, v) = call(&app, "GET", "/api/stats/heatmap?year=2026", &admin, None).await;
+    let days = v["days"].as_array().unwrap();
+    assert!(days.iter().all(|d| d["in_current"].as_bool() == Some(false)));
+    assert_eq!(heat_day(days, "2026-11-04")["frozen"], true);
+
+    // geçersiz today
+    let uri = "/api/stats/heatmap?year=2026&today=2026-13-40";
+    let (st, _) = call(&app, "GET", uri, &admin, None).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn heatmap_frozen_day_crosses_year() {
+    let (app, dirs) = test_app().await;
+    let admin = login_as_admin(&app).await;
+    let b = seed_books(&dirs, "S", 1).await[0];
+    let sql = [
+        session_sql(b, 1, 300, "2025-12-30"),
+        session_sql(b, 2, 300, "2026-01-01"),
+    ]
+    .concat();
+    exec(&dirs, sql).await;
+
+    let uri = "/api/stats/heatmap?year=2025&today=2026-01-01";
+    let (st, v) = call(&app, "GET", uri, &admin, None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(v["years"], serde_json::json!([2025, 2026]));
+    let days = v["days"].as_array().unwrap();
+    let d = heat_day(days, "2025-12-31");
+    assert_eq!(d["frozen"], true);
+    assert_eq!(d["seconds"], 0);
+    assert_eq!(days.len(), 2);
+}
+
 #[tokio::test]
 async fn history_date_filter() {
     let (app, dirs) = test_app().await;

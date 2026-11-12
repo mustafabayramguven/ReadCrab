@@ -552,16 +552,16 @@ async fn stats_streaks_and_daily() {
     dirs.db
         .run(move |conn| {
             let sessions = [
-                // Longest streak of 3 days in October: Oct 10, 11, 12 (>= 60s each)
-                ("c0000000000000000000000000000001", "2026-10-10", 60, 2),
-                ("c0000000000000000000000000000002", "2026-10-11", 90, 3),
-                ("c0000000000000000000000000000003", "2026-10-12", 120, 4),
-                // Day with < 60s does not count towards streak:
-                ("c0000000000000000000000000000004", "2026-10-13", 59, 1),
+                // Longest streak of 3 days in October: Oct 10, 11, 12 (>= 300s each)
+                ("c0000000000000000000000000000001", "2026-10-10", 300, 2),
+                ("c0000000000000000000000000000002", "2026-10-11", 400, 3),
+                ("c0000000000000000000000000000003", "2026-10-12", 500, 4),
+                // Day with < 300s does not count towards streak:
+                ("c0000000000000000000000000000004", "2026-10-13", 299, 1),
                 // Current streak ending yesterday (Nov 6, Nov 7) when today = Nov 8:
-                ("c0000000000000000000000000000005", "2026-11-06", 30, 1),
-                ("c0000000000000000000000000000006", "2026-11-06", 35, 2), // sum = 65 >= 60
-                ("c0000000000000000000000000000007", "2026-11-07", 100, 5),
+                ("c0000000000000000000000000000005", "2026-11-06", 150, 1),
+                ("c0000000000000000000000000000006", "2026-11-06", 160, 2), // sum = 310 >= 300
+                ("c0000000000000000000000000000007", "2026-11-07", 350, 5),
             ];
             for (cid, date, secs, pages) in sessions {
                 conn.execute(
@@ -591,21 +591,62 @@ async fn stats_streaks_and_daily() {
     assert_eq!(res.status(), StatusCode::OK);
     let stats = body_json(res).await;
 
-    assert_eq!(stats["total_seconds"], 60 + 90 + 120 + 59 + 30 + 35 + 100);
+    assert_eq!(stats["total_seconds"], 300 + 400 + 500 + 299 + 150 + 160 + 350);
     assert_eq!(stats["total_pages"], 2 + 3 + 4 + 1 + 1 + 2 + 5);
     assert_eq!(stats["streak_longest"], 3);
     assert_eq!(stats["streak_current"], 2);
+    assert_eq!(stats["streak_at_risk"], true);
+    assert_eq!(stats["today_seconds"], 0);
+    assert_eq!(stats["streak_min_seconds"], 300);
+    assert_eq!(stats["freeze_available"], true);
 
     let daily = stats["daily"].as_array().unwrap();
     assert_eq!(daily.len(), 30);
     assert_eq!(daily[0]["date"], "2026-10-10");
-    assert_eq!(daily[0]["seconds"], 60);
+    assert_eq!(daily[0]["seconds"], 300);
     assert_eq!(daily[29]["date"], "2026-11-08");
     assert_eq!(daily[29]["seconds"], 0);
     assert_eq!(daily[28]["date"], "2026-11-07");
-    assert_eq!(daily[28]["seconds"], 100);
+    assert_eq!(daily[28]["seconds"], 350);
     assert_eq!(daily[27]["date"], "2026-11-06");
-    assert_eq!(daily[27]["seconds"], 65);
+    assert_eq!(daily[27]["seconds"], 310);
+}
+
+async fn seed_session(dirs: &common::TempDirs, book_id: i64, cid: &str, secs: i64) {
+    let cid = cid.to_string();
+    dirs.db
+        .run(move |conn| {
+            conn.execute(
+                "INSERT INTO reading_sessions(
+                    user_id, book_id, client_id, started_at, ended_at,
+                    active_seconds, pages_read, start_percent, end_percent, local_date
+                 ) VALUES (1, ?1, ?2, 1000, 1100, ?3, 1, 0.0, 0.5, '2026-09-01')",
+                rusqlite::params![book_id, cid, secs],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn stats_threshold_boundary() {
+    let (app, dirs) = test_app().await;
+    let cookie = login_as_admin(&app).await;
+    let (cbz_id, _) = setup_two_books(&dirs).await;
+
+    seed_session(&dirs, cbz_id, "d0000000000000000000000000000001", 299).await;
+    let (st, v) = call(&app, "GET", "/api/stats?today=2026-09-01", &cookie, None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(v["streak_current"], 0);
+    assert_eq!(v["today_seconds"], 299);
+
+    // aynı günün oturumları toplanır: 299 + 1 = 300 eşiği geçer
+    seed_session(&dirs, cbz_id, "d0000000000000000000000000000002", 1).await;
+    let (_, v) = call(&app, "GET", "/api/stats?today=2026-09-01", &cookie, None).await;
+    assert_eq!(v["streak_current"], 1);
+    assert_eq!(v["today_seconds"], 300);
+    assert_eq!(v["streak_at_risk"], false);
 }
 
 #[tokio::test]
