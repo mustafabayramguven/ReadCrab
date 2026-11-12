@@ -24,6 +24,10 @@ data class UiPrefs(
     val textMode: String = "scroll",      // scroll | page
     val comicMode: String = "ltr",        // ltr | rtl | webtoon (varsayılan; kitap başına ezilebilir)
     val needsRelogin: Boolean = false,
+    val wordSpacing: Float = 0f,          // 0..0.5, adım 0.05
+    val letterSpacing: Float = 0f,        // 0..0.1, adım 0.01
+    val comicBg: String = "black",        // black | dark | sepia | light
+    val readerHintSeen: Boolean = false,
 )
 
 // Yazı tipi adları marka adıdır; strings.xml'e girmez (kimlik to etiket)
@@ -42,6 +46,7 @@ private val TEXT_FONT_KEYS = TEXT_FONTS.map { it.first }.toSet()
 private val ALIGNS = setOf("left", "justify")
 private val TEXT_MODES = setOf("scroll", "page")
 private val COMIC_MODES = setOf("ltr", "rtl", "webtoon")
+private val COMIC_BGS = setOf("black", "dark", "sepia", "light")
 
 // Anahtar adları alan adlarıdır; sınırlar web calc.js normalizePrefs ile aynıdır.
 private fun normalize(p: UiPrefs): UiPrefs = p.copy(
@@ -53,6 +58,9 @@ private fun normalize(p: UiPrefs): UiPrefs = p.copy(
     align = p.align.takeIf { it in ALIGNS } ?: "left",
     textMode = p.textMode.takeIf { it in TEXT_MODES } ?: "scroll",
     comicMode = p.comicMode.takeIf { it in COMIC_MODES } ?: "ltr",
+    wordSpacing = (Math.round(p.wordSpacing.coerceIn(0f, 0.5f) / 0.05f) * 0.05f).coerceIn(0f, 0.5f),
+    letterSpacing = (Math.round(p.letterSpacing.coerceIn(0f, 0.1f) / 0.01f) * 0.01f).coerceIn(0f, 0.1f),
+    comicBg = p.comicBg.takeIf { it in COMIC_BGS } ?: "black",
 )
 
 class Prefs(ctx: Context) {
@@ -81,6 +89,10 @@ class Prefs(ctx: Context) {
             .putString("textMode", p.textMode)
             .putString("comicMode", p.comicMode)
             .putBoolean("needsRelogin", p.needsRelogin)
+            .putFloat("wordSpacing", p.wordSpacing)
+            .putFloat("letterSpacing", p.letterSpacing)
+            .putString("comicBg", p.comicBg)
+            .putBoolean("readerHintSeen", p.readerHintSeen)
             .apply()
         _state.value = p
     }
@@ -113,6 +125,10 @@ class Prefs(ctx: Context) {
                 textMode = sp.getString("textMode", d.textMode) ?: d.textMode,
                 comicMode = sp.getString("comicMode", d.comicMode) ?: d.comicMode,
                 needsRelogin = sp.getBoolean("needsRelogin", d.needsRelogin),
+                wordSpacing = sp.getFloat("wordSpacing", d.wordSpacing),
+                letterSpacing = sp.getFloat("letterSpacing", d.letterSpacing),
+                comicBg = sp.getString("comicBg", d.comicBg) ?: d.comicBg,
+                readerHintSeen = sp.getBoolean("readerHintSeen", d.readerHintSeen),
             ),
         )
     }

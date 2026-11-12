@@ -70,7 +70,6 @@ import io.github.mustafabayramguven.readcrab.core.SeriesDetail
 import io.github.mustafabayramguven.readcrab.ui.common.CoverImage
 import io.github.mustafabayramguven.readcrab.ui.common.formatPercent
 import io.github.mustafabayramguven.readcrab.ui.theme.Dimens
-import io.github.mustafabayramguven.readcrab.work.Scheduler
 import java.time.LocalDate
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -114,7 +113,7 @@ class SeriesViewModel(app: Application) : AndroidViewModel(app) {
             is SeriesEvent.RemoveDownload -> action { rc.downloads.remove(e.bookIds) }
             is SeriesEvent.MarkStatus -> action {
                 for (id in e.bookIds) rc.core.setStatus(id, e.status, LocalDate.now().toString())
-                Scheduler.kickSync(getApplication<Application>())
+                rc.sync.onLocalChange(2000)
             }
             SeriesEvent.MessageShown -> _state.update { it.copy(message = null) }
         }

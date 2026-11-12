@@ -58,6 +58,7 @@ import io.github.mustafabayramguven.readcrab.ui.common.SettingsSwitchRow
 import io.github.mustafabayramguven.readcrab.ui.theme.Dimens
 import io.github.mustafabayramguven.readcrab.ui.theme.ThemeMode
 import io.github.mustafabayramguven.readcrab.work.Scheduler
+import io.github.mustafabayramguven.readcrab.sync.SyncKind
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -97,6 +98,17 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         viewModelScope.launch { rc.prefs.state.collect { p -> _state.update { it.copy(prefs = p) } } }
+        viewModelScope.launch {
+            rc.sync.indicator.collect { ind ->
+                _state.update { it.copy(syncing = ind.kind == SyncKind.SYNCING) }
+                refresh()
+            }
+        }
+        viewModelScope.launch {
+            rc.sync.completed.collect {
+                _state.update { it.copy(message = getApplication<Application>().getString(R.string.sync_done)) }
+            }
+        }
         refresh()
     }
 
@@ -112,29 +124,12 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     fun onEvent(e: SettingsEvent) {
         when (e) {
             is SettingsEvent.Patch -> rc.prefs.update(e.f)
-            SettingsEvent.SyncNow -> syncNow()
+            SettingsEvent.SyncNow -> rc.sync.syncNow()
             SettingsEvent.ClearCache -> clearCache()
             SettingsEvent.AskLogout -> _state.update { it.copy(confirmLogout = true) }
             SettingsEvent.CancelLogout -> _state.update { it.copy(confirmLogout = false) }
             SettingsEvent.ConfirmLogout -> logout()
             SettingsEvent.MessageShown -> _state.update { it.copy(message = null) }
-        }
-    }
-
-    private fun syncNow() {
-        _state.update { it.copy(syncing = true) }
-        viewModelScope.launch(Dispatchers.IO) {
-            val msg = try {
-                rc.core.syncNow()
-                getApplication<Application>().getString(R.string.sync_done)
-            } catch (e: CoreException.Unauthorized) {
-                rc.prefs.update { it.copy(needsRelogin = true) } // ekran onSessionExpired'ı prefs'ten çağırır
-                null
-            } catch (e: CoreException) {
-                getApplication<Application>().getString(R.string.library_refresh_failed, e.message ?: "")
-            }
-            _state.update { it.copy(syncing = false, message = msg) }
-            refresh()
         }
     }
 

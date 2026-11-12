@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.outlined.LocalFireDepartment
 import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -60,7 +61,9 @@ import io.github.mustafabayramguven.readcrab.core.SeriesItem
 import io.github.mustafabayramguven.readcrab.ui.common.CoverImage
 import io.github.mustafabayramguven.readcrab.ui.common.EmptyState
 import io.github.mustafabayramguven.readcrab.ui.common.OfflineBanner
+import io.github.mustafabayramguven.readcrab.ui.common.SyncIndicatorButton
 import io.github.mustafabayramguven.readcrab.ui.theme.Dimens
+import io.github.mustafabayramguven.readcrab.sync.SyncKind
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -91,14 +94,25 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
     init {
         viewModelScope.launch { rc.connectivity.online.collect { on -> _state.update { it.copy(online = on) } } }
         viewModelScope.launch { rc.downloads.infos.collect { reload() } }
-        if (rc.connectivity.online.value) syncNow() // çevrimiçiyse açılışta otomatik eşitleme
+        viewModelScope.launch { rc.sync.completed.collect { reload() } }
+        viewModelScope.launch {
+            rc.sync.indicator.collect { ind ->
+                val err = ind.error
+                val msg = if (ind.kind == SyncKind.ERROR && err != null) {
+                    getApplication<Application>().getString(R.string.library_refresh_failed, err)
+                } else {
+                    null
+                }
+                _state.update { it.copy(refreshing = ind.kind == SyncKind.SYNCING, message = msg ?: it.message) }
+            }
+        }
     }
 
     fun onEvent(e: LibraryEvent) {
         when (e) {
             is LibraryEvent.Query -> { _state.update { it.copy(query = e.q) }; reload() }
             is LibraryEvent.OnlyDownloaded -> { _state.update { it.copy(onlyDownloaded = e.on) }; reload() }
-            LibraryEvent.Refresh -> syncNow()
+            LibraryEvent.Refresh -> rc.sync.syncNow()
             LibraryEvent.MessageShown -> _state.update { it.copy(message = null) }
         }
     }
@@ -116,22 +130,6 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun syncNow() {
-        _state.update { it.copy(refreshing = true) }
-        viewModelScope.launch(Dispatchers.IO) {
-            val msg = try {
-                rc.core.syncNow()
-                null
-            } catch (e: CoreException.Unauthorized) {
-                rc.prefs.update { it.copy(needsRelogin = true) }
-                null
-            } catch (e: CoreException) {
-                getApplication<Application>().getString(R.string.library_refresh_failed, e.message ?: "")
-            }
-            _state.update { it.copy(refreshing = false, message = msg ?: it.message) }
-            reload()
-        }
-    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -140,6 +138,7 @@ fun LibraryScreen(
     onOpenSeries: (Long) -> Unit,
     onOpenBook: (Long) -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenStats: () -> Unit,
     onSessionExpired: () -> Unit,
     vm: LibraryViewModel = viewModel(),
 ) {
@@ -173,6 +172,10 @@ fun LibraryScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = onOpenStats) {
+                        Icon(Icons.Outlined.LocalFireDepartment, contentDescription = stringResource(R.string.stats_open))
+                    }
+                    SyncIndicatorButton()
                     IconButton(onClick = {
                         if (searching) vm.onEvent(LibraryEvent.Query(""))
                         searching = !searching

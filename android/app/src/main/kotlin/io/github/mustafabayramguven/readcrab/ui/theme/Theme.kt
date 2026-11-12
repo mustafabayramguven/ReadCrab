@@ -144,3 +144,11 @@ fun readerColors(theme: String): ReaderPalette = when (theme) {
     "black" -> ReaderPalette("#000000", "#E6E0E9", "#D0BCFF")
     else -> throw IllegalArgumentException("Bilinmeyen okuyucu teması: $theme")
 }
+
+// Çizgi roman zemini (Prefs.comicBg); bilinmeyen anahtar siyah
+fun comicBgColor(key: String): Color = when (key) {
+    "dark" -> Color(0xFF141218)
+    "sepia" -> Color(0xFFF4ECD8)
+    "light" -> Color(0xFFFEF7FF)
+    else -> Color.Black
+}

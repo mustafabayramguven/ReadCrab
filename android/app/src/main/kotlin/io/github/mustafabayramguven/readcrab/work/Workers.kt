@@ -6,12 +6,10 @@ import androidx.core.app.NotificationCompat
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
-import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
 import androidx.work.ForegroundInfo
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import io.github.mustafabayramguven.readcrab.R
@@ -37,23 +35,6 @@ object Scheduler {
             .build()
         WorkManager.getInstance(ctx)
             .enqueueUniqueWork("downloads", ExistingWorkPolicy.APPEND_OR_REPLACE, req)
-    }
-
-    fun schedulePeriodicSync(ctx: Context) {
-        val req = PeriodicWorkRequestBuilder<SyncWorker>(1, TimeUnit.HOURS)
-            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-            .build()
-        WorkManager.getInstance(ctx)
-            .enqueueUniquePeriodicWork("sync-periodic", ExistingPeriodicWorkPolicy.KEEP, req)
-    }
-
-    fun kickSync(ctx: Context) {
-        val req = OneTimeWorkRequestBuilder<SyncWorker>()
-            .setInitialDelay(5, TimeUnit.SECONDS)
-            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-            .build()
-        WorkManager.getInstance(ctx)
-            .enqueueUniqueWork("sync-kick", ExistingWorkPolicy.REPLACE, req)
     }
 
     /** Çıkışta tüm işler iptal edilir. */
@@ -96,29 +77,6 @@ class DownloadWorker(ctx: Context, p: WorkerParameters) : CoroutineWorker(ctx, p
             app.prefs.update { it.copy(needsRelogin = true) }
             Result.failure()
         } catch (e: CoreException.Network) {
-            Result.retry()
-        } catch (e: CoreException.Tls) {
-            Result.failure()
-        } catch (e: CoreException) {
-            Result.failure()
-        }
-    }
-}
-
-class SyncWorker(ctx: Context, p: WorkerParameters) : CoroutineWorker(ctx, p) {
-    override suspend fun doWork(): Result {
-        val app = applicationContext as RcApp
-        val core = app.core
-        if (core.session() == null) return Result.success()
-        return try {
-            withContext(Dispatchers.IO) { core.syncNow() }
-            Result.success()
-        } catch (e: CoreException.Unauthorized) {
-            app.prefs.update { it.copy(needsRelogin = true) }
-            Result.failure()
-        } catch (e: CoreException.Network) {
-            Result.retry()
-        } catch (e: CoreException.Server) {
             Result.retry()
         } catch (e: CoreException.Tls) {
             Result.failure()

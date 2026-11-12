@@ -26,6 +26,7 @@ import io.github.mustafabayramguven.readcrab.ui.reader.comic.ComicReaderScreen
 import io.github.mustafabayramguven.readcrab.ui.reader.text.TextReaderScreen
 import io.github.mustafabayramguven.readcrab.ui.series.SeriesScreen
 import io.github.mustafabayramguven.readcrab.ui.settings.SettingsScreen
+import io.github.mustafabayramguven.readcrab.ui.stats.StatsScreen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -66,6 +67,7 @@ fun AppNav(app: RcApp) {
                 onOpenSeries = { id -> nav.navigate("seri/$id") },
                 onOpenBook = { id -> nav.navigate("oku/$id") },
                 onOpenSettings = { nav.navigate("ayarlar") },
+                onOpenStats = { nav.navigate("istatistik") },
                 onSessionExpired = sessionExpired,
             )
         }
@@ -90,6 +92,12 @@ fun AppNav(app: RcApp) {
                 onBack = readerBack,
                 onNextBook = nextBook,
                 onSessionExpired = toLogin,
+            )
+        }
+        composable("istatistik") {
+            StatsScreen(
+                onBack = { nav.popBackStack() },
+                onSessionExpired = sessionExpired,
             )
         }
         composable("ayarlar") {

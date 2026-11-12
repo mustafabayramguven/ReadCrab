@@ -46,7 +46,6 @@ import io.github.mustafabayramguven.readcrab.R
 import io.github.mustafabayramguven.readcrab.RcApp
 import io.github.mustafabayramguven.readcrab.core.CoreException
 import io.github.mustafabayramguven.readcrab.ui.theme.Dimens
-import io.github.mustafabayramguven.readcrab.work.Scheduler
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -109,8 +108,7 @@ class LoginViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 rc.core.login(s.server, s.username, s.password)
                 rc.prefs.update { it.copy(needsRelogin = false) }
-                Scheduler.schedulePeriodicSync(getApplication<Application>())
-                Scheduler.kickSync(getApplication<Application>())
+                rc.sync.syncNow()
                 _effects.emit(LoginEffect.LoggedIn)
             } catch (e: CoreException) {
                 val msg = when (e) {

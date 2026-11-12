@@ -26,6 +26,16 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        (application as RcApp).sync.onForeground()
+    }
+
+    override fun onStop() {
+        (application as RcApp).sync.foreground = false
+        super.onStop()
+    }
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
             val h = VolumeKeys.handler

@@ -1895,4 +1895,1134 @@ G3 testleri (bölüm 3.2) + MEVCUT tüm sunucu testleri değişmeden geçmeli (`
 - TLS: yalnız Mozilla kökleri (webpki-roots); özel CA/kendi imzalı sertifika yok. Bu durumda `CoreError::Tls` ve `login_error_tls` metni gösterilir; destek gerekirse `rustls-platform-verifier` + JNI başlatma sonraki sürümde.
 - `ureq` bloklayan: iptal, hazır isteğin bitmesini bekler (en çok 30 sn).
 
+## CEO'YA SORULAR (iterasyon 1): yok
+
+---
+
+## 11. İterasyon 2
+
+Bu bölüm GERÇEK koda (iterasyon 1 sonrası düzeltme turları dahil) göre yazıldı; eski bölümlerle çelişen maddeler burada açıkça GEÇERSİZ ilan edilir. İşçiler hiçbir git komutu çalıştırmaz, derleme yoktur; Cargo.toml / Gradle bağımlılığı DEĞİŞMEZ (yeni bağımlılık yok, `lock.yml` devreye girmez). Kaynak yolları: `KÖK` = `android/app/src/main/kotlin/io/github/mustafabayramguven/readcrab/`, `TESTK` = `android/app/src/test/kotlin/io/github/mustafabayramguven/readcrab/`, `CORE` = `crates/core/`.
+
+### 11.0 Geçersiz kılınan eski maddeler
+
+| Eski madde | Durum |
+|---|---|
+| 4.7 / 5.3 — `apply_progress` sunucu daha yeniyse yereli sessizce ezer; 5.3 "pull_book uygular" | GEÇERSİZ. 11.4: yerelde konum varsa ve sunucununki farklı+yeni ise ÖNERİ olarak saklanır, uygulanmaz. |
+| 5.4 — "okuyucuda her 30 sn `sync_push`, çıkışta `Scheduler.kickSync`, arka planda `SyncWorker` periyodik (1 saat) ve `kickSync` (5 sn gecikme)" | GEÇERSİZ. 11.5: arka plan eşitlemesi YOK. |
+| 6.5 `Scheduler.schedulePeriodicSync`, `Scheduler.kickSync`, `SyncWorker` | GEÇERSİZ, silinir (11.5). `Scheduler.scheduleDownload` ve `cancelAll` KALIR. |
+| 6.7 `ReadingTracker` içindeki 30 sn'lik `syncPush` döngüsü ve `stop()` içindeki `Scheduler.kickSync` | GEÇERSİZ. 11.5 (`SyncCoordinator`). |
+| 6.8 `ComicTopBar` içindeki ⋮ menüsünde yalnız yön seçimi | GEÇERSİZ. 11.7 (ayar alt sayfası). |
+| 6.9 `reader.html`, `reader.js` (sayfa modu geometrisi, `BAR_V`, yerel sürükleme + gecikmeli yapışma, oran tabanlı konum), "WebView `fillMaxSize` + immersive iken ek boşluk yok", `SetPrefs` alan listesi | GEÇERSİZ. 11.6. |
+| 6.9 / 6.6 konum biçimi `{"ch":N,"p":R}` | GENİŞLETİLDİ: `{"ch":N,"p":R,"b":B}` (11.3). Web biçimi aynen okunur. |
+| 3 / `src/api/stats.rs` günlük eşik `secs >= 60` (kod: `active_set`) | GEÇERSİZ. `STREAK_MIN_SECONDS = 300` (11.1). |
+| 6.4 `UiPrefs` alan listesi | GENİŞLETİLDİ (11.8). |
+| 6.6 Kütüphane `LibraryViewModel.syncNow()` doğrudan `core.syncNow()` çağırır; Ayarlar aynı | GEÇERSİZ: ikisi de `SyncCoordinator.syncNow()` kullanır (11.5). |
+
+### 11.1 Sunucu: seri/zincir kuralı (`src/api/stats.rs`)
+
+**Kural (kesin).**
+1. Bir gün "nitelikli"dir ⇔ o `local_date` için `SUM(active_seconds) >= STREAK_MIN_SECONDS` (`pub const STREAK_MIN_SECONDS: i64 = 300`). Eşik altı gün (saniye > 0) ısı haritasında yoğunlukla görünür ama zincire girmez.
+2. Haftalar Pazartesi–Pazar. `week_of(day) = (day + 3).div_euclid(7)` (`day` = `days_from_civil` gün numarası; 1970-01-01 Perşembe olduğu için +3). Yıl başı/sonu hafta numarasını bozmaz (süreklidir).
+3. Dondurma hakkı: her `week_of` değeri için en çok 1 kez kullanılabilir (küresel, hesap kronolojik ilerler; kopan bir zincirde harcanan hak da harcanmış sayılır).
+4. İleri geçiş (en eski nitelikli günden bugüne, yalnız `gün <= bugün` olanlar): sıradaki nitelikli gün `d`, zincirin son nitelikli günü `prev`:
+   - `d == prev + 1` → zincir uzar.
+   - `d == prev + 2` ve `week_of(prev + 1)` kullanılmamış → `prev + 1` DONMUŞ gün olur (hak harcanır), zincir sürer, donmuş gün sayıya EKLENMEZ.
+   - başka her durum (iki ardışık boş gün, ya da boş günün haftasının hakkı kullanılmış) → yeni zincir başlar.
+5. Zincir uzunluğu = zincirdeki NİTELİKLİ gün sayısı. `streak_longest` = en büyük zincir uzunluğu (güncel zincir dahil).
+6. Güncel seri: en son nitelikli gün `L` (`<= bugün` olanlar arasında), `T` = bugün:
+   - `L == T` → canlı, `at_risk = false`.
+   - `L == T-1` → canlı, `at_risk = true`.
+   - `L == T-2` ve `week_of(T-1)` kullanılmamış → canlı, `at_risk = true`, `T-1` DONMUŞ olur (hak o an harcanmış sayılır; bugün nitelikli olursa zincir `L, T-1(donmuş), T` olarak sürer).
+   - aksi halde → seri 0, `at_risk = false` (iki boş gün ya da hak yok).
+   `streak_current` = canlıysa son zincirin nitelikli gün sayısı, değilse 0. `current_days` = canlıysa zincirin nitelikli + donmuş günleri, değilse boş.
+7. `freeze_available = !kullanılmış.contains(week_of(T))` (bekleyen `T-1` dondurması dahil hesaplandıktan sonra).
+8. `T`den sonraki tarihli oturumlar (saat dilimi) yok sayılır.
+
+**Kod** (`src/api/stats.rs`, mevcut `use` satırına `BTreeMap, BTreeSet` eklenir):
+```rust
+pub const STREAK_MIN_SECONDS: i64 = 300;
+
+/// Pazartesi başlangıçlı takvim haftası numarası (1970-01-01 Perşembe).
+pub fn week_of(day: i64) -> i64 {
+    (day + 3).div_euclid(7)
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Streaks {
+    pub current: i64,
+    pub longest: i64,
+    pub at_risk: bool,
+    pub freeze_available: bool,
+    pub frozen: BTreeSet<i64>,
+    pub current_days: BTreeSet<i64>,
+}
+
+struct Chain {
+    days: Vec<i64>,
+    frozen: Vec<i64>,
+}
+
+pub fn compute_streaks(qualified: &BTreeSet<i64>, today: i64) -> Streaks {
+    let mut used: HashSet<i64> = HashSet::new();
+    let mut frozen: BTreeSet<i64> = BTreeSet::new();
+    let mut chains: Vec<Chain> = Vec::new();
+    for &d in qualified.iter().filter(|&&d| d <= today) {
+        if chains.is_empty() {
+            chains.push(Chain { days: vec![d], frozen: vec![] });
+            continue;
+        }
+        let last = chains.last_mut().unwrap();
+        let prev = *last.days.last().unwrap();
+        if d == prev + 1 {
+            last.days.push(d);
+        } else if d == prev + 2 && !used.contains(&week_of(prev + 1)) {
+            used.insert(week_of(prev + 1));
+            frozen.insert(prev + 1);
+            last.frozen.push(prev + 1);
+            last.days.push(d);
+        } else {
+            chains.push(Chain { days: vec![d], frozen: vec![] });
+        }
+    }
+    let mut out = Streaks {
+        longest: chains.iter().map(|c| c.days.len() as i64).max().unwrap_or(0),
+        ..Default::default()
+    };
+    if let Some(c) = chains.last_mut() {
+        let l = *c.days.last().unwrap();
+        let state = if l == today {
+            Some(false)
+        } else if l == today - 1 {
+            Some(true)
+        } else if l == today - 2 && !used.contains(&week_of(today - 1)) {
+            used.insert(week_of(today - 1));
+            frozen.insert(today - 1);
+            c.frozen.push(today - 1);
+            Some(true)
+        } else {
+            None
+        };
+        if let Some(risk) = state {
+            out.current = c.days.len() as i64;
+            out.at_risk = risk;
+            out.current_days = c.days.iter().chain(c.frozen.iter()).copied().collect();
+        }
+    }
+    out.freeze_available = !used.contains(&week_of(today));
+    out.frozen = frozen;
+    out
+}
+```
+**`get_stats` değişikliği:** `active_days`/`active_set`/`streak_longest`/`cur_run`/`start_check` bloğu (kodda `secs >= 60`'tan `while active_set.contains(&d)` döngüsüne kadar) SİLİNİR; yerine:
+```rust
+let mut qualified: BTreeSet<i64> = BTreeSet::new();
+for (d_str, secs, pages) in grouped {
+    by_date.insert(d_str.clone(), (secs, pages));
+    if secs >= STREAK_MIN_SECONDS {
+        if let Ok((y, m, d)) = parse_local_date(&d_str) {
+            qualified.insert(days_from_civil(y, m, d));
+        }
+    }
+}
+let streaks = compute_streaks(&qualified, today_days);
+let (ty, tm, td) = civil_from_days(today_days);
+let today_seconds = by_date.get(&format!("{ty:04}-{tm:02}-{td:02}")).map_or(0, |v| v.0);
+```
+`StatsRes`'e EKLENEN alanlar (mevcutlar aynen kalır): `streak_at_risk: bool`, `today_seconds: i64`, `streak_min_seconds: i64` (= 300), `freeze_available: bool`; `streak_current`/`streak_longest` yeni kurala göre `streaks.current`/`streaks.longest`.
+
+**Isı haritası (`get_heatmap`)**: `HeatmapQuery`'ye `today: Option<String>` eklenir (verilirse `parse_local_date` ile doğrulanır, geçersizse 400). Sorgu tüm yılları tek `GROUP BY local_date` ile çeker (yıl süzgeci SQL'den kalkar; `years` listesi bu sözlüğün anahtarlarının ilk 4 hanesinden, sıralı ve tekil). `qualified` kümesi tüm yıllardan kurulur; `today` yoksa `compute_streaks(&qualified, son_nitelikli_gün + 3)` (zincir ölü sayılır, `in_current` hepsi false), varsa `today_days`. Yanıt günleri: seçili yıla ait `by_date` kayıtları ∪ o yıla düşen `streaks.frozen` günleri (verisi olmayan donmuş gün `seconds:0, pages:0`), tarihe göre sıralı:
+```rust
+#[derive(Serialize)]
+struct HeatDay {
+    date: String,
+    seconds: i64,
+    pages: i64,
+    qualified: bool,   // seconds >= STREAK_MIN_SECONDS
+    frozen: bool,      // donmuş gün (verisi olsa da olmasa da)
+    in_current: bool,  // today verildi ve gün güncel zincire ait
+}
+#[derive(Serialize)]
+struct HeatmapRes {
+    year: i32,
+    years: Vec<i32>,
+    streak_min_seconds: i64,
+    days: Vec<HeatDay>,
+}
+```
+`DailyStat` (/api/stats `daily`) DEĞİŞMEZ.
+
+**Testler.**
+`src/api/stats.rs` içinde `#[cfg(test)] mod tests` (yardımcı `fn d(y: i32, m: u32, day: u32) -> i64 { days_from_civil(y, m, day) }`, `fn set(v: &[i64]) -> BTreeSet<i64>`). Referans: 2026-11-08 PAZAR; hafta A = 2–8 Kasım, B = 26 Eki–1 Kas, C = 9–15 Kasım. Tablo (bugün, nitelikli kümesi → current, longest, at_risk, frozen, freeze_available):
+| # | bugün | nitelikli | current | longest | at_risk | frozen | freeze_available |
+|---|---|---|---|---|---|---|---|
+| 1 | 11-08 | 11-06, 11-07, 11-08 | 3 | 3 | false | {} | true |
+| 2 | 11-08 | 11-06, 11-07 | 2 | 2 | true | {} | true |
+| 3 | 11-05 | 11-03, 11-05 | 2 | 2 | false | {11-04} | false |
+| 4 | 11-07 | 11-03, 11-05, 11-07 | 1 | 2 | false | {11-04} | false (aynı haftada ikinci boşluk zinciri koparır) |
+| 5 | 11-04 | 10-31, 11-02, 11-04 | 3 | 3 | false | {11-01, 11-03} | false (farklı haftalar B ve A) |
+| 6 | 11-05 | 11-02, 11-05 | 1 | 1 | false | {} | true (art arda iki boş gün) |
+| 7 | 11-08 | 11-06 | 1 | 1 | true | {11-07} | false (bekleyen dondurma) |
+| 8 | 11-07 | 11-03, 11-05 | 0 | 2 | false | {11-04} | false (dünün haftasında hak harcanmış → seri ölü) |
+| 9 | 11-08 | 11-05 | 0 | 1 | false | {} | true (L = T-3) |
+| 10 | 2026-01-01 | 2025-12-30, 2026-01-01 | 2 | 2 | false | {2025-12-31} | false (yıl sınırı, aynı hafta) |
+| 11 | 11-08 | 11-07, 11-09 | 1 | 1 | true | {} | true (gelecek tarih yok sayılır) |
+| 12 | 11-11 | 11-07, 11-09, 11-11 | 3 | 3 | false | {11-08, 11-10} | false (hafta A Pazar ve hafta C Salı) |
+| 13 | 11-08 | 10-01..10-05, 11-07 | 1 | 5 | true | {} | true |
+| 14 | 11-08 | {} | 0 | 0 | false | {} | true |
+Ek: #7 için `current_days == {11-06, 11-07}`; #5 için `current_days == {10-31, 11-01, 11-02, 11-03, 11-04}`; #4 için `current_days == {11-07}`.
+`tests/tracking.rs` — MEVCUT `stats_streaks_and_daily` güncellenir (eşik 300): seed saniyeleri 300/400/500 (10-10, 10-11, 10-12), 299 (10-13), 11-06: iki oturum 150 + 160, 11-07: 350; beklenenler: `total_seconds = 300+400+500+299+150+160+350`, `total_pages` aynı (sayfa değerleri değişmez), `streak_longest == 3`, `streak_current == 2`, `daily[0].seconds == 300`, `daily[27].seconds == 310`, `daily[28].seconds == 350`; eklenenler: `streak_at_risk == true`, `today_seconds == 0`, `streak_min_seconds == 300`, `freeze_available == true`. `stats_other_user_isolated` değişmez. YENİ `tests/tracking.rs::stats_threshold_boundary`: tek gün 299 sn → `streak_current == 0`; 300 sn → 1 (`today` o gün).
+`tests/iter2.rs` — mevcut `heatmap_isolated_per_user` DEĞİŞMEZ (günler hâlâ 2). YENİ `heatmap_marks_qualified_frozen_in_current`: oturumlar 2026-11-03 (300), 2026-11-05 (400), 2026-11-06 (100); `GET /api/stats/heatmap?year=2026&today=2026-11-05` → `streak_min_seconds == 300`; `days` içinde 11-03 `{seconds:300, qualified:true, frozen:false, in_current:true}`, 11-04 `{seconds:0, pages:0, qualified:false, frozen:true, in_current:true}`, 11-05 `{qualified:true, in_current:true}`, 11-06 `{seconds:100, qualified:false, frozen:false, in_current:false}`; aynı istek `today` OLMADAN: hepsinde `in_current == false`, 11-04 yine `frozen == true`. YENİ `heatmap_frozen_day_crosses_year`: oturumlar 2025-12-30 ve 2026-01-01 (300 sn); `year=2025&today=2026-01-01` yanıtında 2025-12-31 `frozen:true` ve `years == [2025, 2026]`.
+
+### 11.2 Web: zincir görünümü (`web/calc.js`, `web/calc.test.mjs`, `web/stats.js`, `web/style.css`)
+
+**`web/calc.js`** — `api` nesnesine iki saf fonksiyon eklenir (DOM yok):
+```js
+// Ardışık iki gün de bağlıysa (nitelikli veya donmuş) aralarına bağlantı. cells = yearGrid(y).cells (günlük, sıralı).
+function chainLinks(cells, byDate) {
+  var out = [];
+  function linked(d) { return !!d && (d.qualified === true || d.frozen === true); }
+  for (var i = 0; i + 1 < cells.length; i++) {
+    var da = byDate[cells[i].date], db = byDate[cells[i + 1].date];
+    if (linked(da) && linked(db)) {
+      out.push({ a: i, b: i + 1, wrap: cells[i + 1].col !== cells[i].col, current: !!(da.in_current && db.in_current) });
+    }
+  }
+  return out;
+}
+
+function streakMessage(s) {
+  var min = s.streak_min_seconds || 300;
+  var mins = Math.max(1, Math.ceil(Math.max(0, min - (s.today_seconds || 0)) / 60));
+  var freezeText = s.freeze_available ? 'Bu haftanın dondurma hakkı duruyor' : 'Bu haftanın dondurma hakkı kullanıldı';
+  if (s.streak_at_risk) return { kind: 'risk', text: 'Seriyi korumak için bugün ' + mins + ' dk daha oku', freezeText: freezeText };
+  if ((s.streak_current || 0) > 0) return { kind: 'ok', text: 'Bugünkü hedef tamam', freezeText: freezeText };
+  return { kind: 'none', text: 'Seri başlatmak için bugün ' + mins + ' dk oku', freezeText: freezeText };
+}
+```
+`api`'ye `chainLinks: chainLinks, streakMessage: streakMessage`.
+**`web/calc.test.mjs`** sonuna eklenir:
+```js
+// chainLinks
+const cells = c.yearGrid(2026).cells;
+const idx = (d) => cells.findIndex((x) => x.date === d);
+const byDate = {
+  '2026-11-03': { qualified: true, frozen: false, in_current: true },
+  '2026-11-04': { qualified: false, frozen: true, in_current: true },
+  '2026-11-05': { qualified: true, frozen: false, in_current: true },
+  '2026-11-06': { qualified: false, frozen: false, in_current: false },
+  '2026-11-07': { qualified: true, frozen: false, in_current: false },
+  '2026-11-08': { qualified: true, frozen: false, in_current: false }
+};
+const links = c.chainLinks(cells, byDate);
+assert.deepEqual(links.map((l) => [l.a, l.b]), [[idx('2026-11-03'), idx('2026-11-04')], [idx('2026-11-04'), idx('2026-11-05')], [idx('2026-11-07'), idx('2026-11-08')]]);
+assert.deepEqual(links.map((l) => l.current), [true, true, false]);
+assert.equal(links[2].wrap, false); // 11-07 Cumartesi ve 11-08 Pazar aynı sütunda
+byDate['2026-11-09'] = { qualified: true, frozen: false, in_current: false };
+const wrapLink = c.chainLinks(cells, byDate).find((l) => l.a === idx('2026-11-08'));
+assert.equal(wrapLink.wrap, true); // Pazar -> sonraki Pazartesi: yeni sütun
+```
+```js
+// streakMessage
+assert.deepEqual(c.streakMessage({ streak_at_risk: true, today_seconds: 0, streak_min_seconds: 300, freeze_available: true, streak_current: 4 }),
+  { kind: 'risk', text: 'Seriyi korumak için bugün 5 dk daha oku', freezeText: 'Bu haftanın dondurma hakkı duruyor' });
+assert.equal(c.streakMessage({ streak_at_risk: true, today_seconds: 241, streak_min_seconds: 300, freeze_available: false }).text, 'Seriyi korumak için bugün 1 dk daha oku');
+assert.equal(c.streakMessage({ streak_at_risk: false, streak_current: 3, today_seconds: 300, streak_min_seconds: 300, freeze_available: false }).kind, 'ok');
+assert.equal(c.streakMessage({ streak_current: 0, today_seconds: 120, streak_min_seconds: 300, freeze_available: true }).text, 'Seri başlatmak için bugün 3 dk oku');
+assert.equal(c.streakMessage({ streak_current: 0, freeze_available: false }).freezeText, 'Bu haftanın dondurma hakkı kullanıldı');
+```
+**`web/stats.js`** değişiklikleri:
+1. `buildYearViews.load()`: istek `'/api/stats/heatmap?year=' + year + '&today=' + encodeURIComponent(KRS.todayLocal())`.
+2. `drawHeatmap`: `byDate[d.date] = d` aynen; her hücre için `var q = d && d.qualified, fz = d && d.frozen, cur = d && d.in_current, weak = d && !d.qualified && !d.frozen && (Number(d.seconds) || 0) > 0`. Sınıflar: `hm-cell hm-<level>` + `hm-link` (q||fz) + `hm-cur` (cur) + `hm-frozen` (fz) + `hm-weak` (weak). Dolgu: donmuş hücrede `fill="url(#hm-frozen-pat)"` (aşağıdaki desen), diğerlerinde mevcut `hm-<level>`. `aria-label` = mevcut metin + (q ? ', seriye sayıldı' : fz ? ', seri dondurma günü' : weak ? ', eşiğin altında, seriye sayılmadı' : '') + (cur ? ', güncel seride' : ''). `<title>` aynı metin.
+3. `svg`'nin başında `<defs>` içine desen: `pattern#hm-frozen-pat` `width=4 height=4 patternUnits=userSpaceOnUse patternTransform=rotate(45)`, içinde `rect width=4 height=4 class=hm-frozen-bg` ve `rect width=2 height=4 class=hm-frozen-stripe`.
+4. Bağlantılar: `calc.chainLinks(grid.cells, byDate)` ile her bağlantı için, hücrelerden ÖNCE çizilmek üzere (`svg.insertBefore` ile `<g>` başa), `wrap` false ise iki hücre arasındaki boşluğa `rect x=LEFT+col*step y=TOP+row_a*step+cs width=cs height=GAP class="hm-link-bar [hm-link-cur]"`; `wrap` true ise (Pazar → sonraki Pazartesi) Pazar hücresinin altına `rect y=TOP+6*step+cs height=GAP` ve sonraki sütunun Pazartesi hücresinin üstüne `rect y=TOP-GAP height=GAP` (`TOP` ekseni payı içinde) aynı sınıflarla.
+5. Göstergeye (legend) üç ek öğe: "Seriye sayıldı" (çerçeveli hücre), "Donmuş gün" (desenli hücre), "Eşik altı" (soluk hücre); `aria-hidden` KALKAR (bu öğeler duruma anlam verir): her öğe `<span>` metin + küçük svg.
+6. `renderStats`: `statItems`'taki "Güncel seri" ve "En uzun seri" kartları KALDIRILIR; yerlerine `stat-grid`'den ÖNCE tam genişlik `<section class="streak-card [risk]">` eklenir: büyük sayı `data.streak_current + ' gün'` (`.streak-num`), `En uzun seri: N gün` (`.streak-sub`), `calc.streakMessage(data)` ile `.streak-msg` (`role="status"`, `kind==='risk'` ise kart `risk` sınıfı ve metin başına `warning` simgesi) ve `.streak-freeze` satırı (`freezeText`). Mevcut `local_fire_department` simgesi sayının yanında.
+**`web/style.css`** eklenir (yalnız mevcut tema belirteçleri; açık/koyu/saf siyah hepsinde geçerli):
+```css
+.hm-cell.hm-cur { stroke: var(--md-sys-color-primary); stroke-width: 1.5; }
+.hm-weak { opacity: 0.5; }
+.hm-frozen-bg { fill: var(--md-sys-color-surface-container-high); }
+.hm-frozen-stripe { fill: var(--md-sys-color-tertiary); }
+.hm-cell.hm-frozen { stroke: var(--md-sys-color-tertiary); stroke-width: 1; }
+.hm-link-bar { fill: var(--md-sys-color-outline-variant); }
+.hm-link-bar.hm-link-cur { fill: var(--md-sys-color-primary); }
+.hm-legend { flex-wrap: wrap; gap: 12px; }
+.hm-legend .lg { display: inline-flex; align-items: center; gap: 6px; }
+.streak-card { background: var(--md-sys-color-surface-container-low); color: var(--md-sys-color-on-surface); border-radius: var(--md-sys-shape-corner-medium); padding: 16px; margin-bottom: 24px; display: flex; flex-direction: column; gap: 4px; }
+.streak-card.risk { background: var(--md-sys-color-error-container); color: var(--md-sys-color-on-error-container); }
+.streak-num { font-size: var(--md-sys-typescale-headline-medium-size); font-weight: var(--md-sys-typescale-headline-medium-weight); margin: 0; }
+.streak-sub, .streak-msg, .streak-freeze { margin: 0; }
+.streak-msg { font-weight: 600; }
+```
+Durum yalnız renkle verilmez: bağlantı çubukları + desen + metin + `aria-label`.
+
+### 11.3 Locator uyumu (web ↔ mobil) — kesin
+
+Web okuyucu (`web/reader-text.js`) YAZDIĞI: `{"ch":N,"p":R}` (`R` = sayfa modunda `i/(n-1)`, kaydırmada `scrollTop/maxScroll`); OKUDUĞU: yalnız `parsed.ch` ve `parsed.p` (fazladan anahtarlar yok sayılır; yer imi eşleme/atlama da yalnız `ch` ve `p`). Kitap yüzdesi `(ch + p) / page_count`. **Web'de DEĞİŞİKLİK YOK.**
+Mobil artık yazar: `{"ch":N,"p":R,"b":B}`; `p` web ile aynı anlamda (web bunu aynen kullanır), `b` = bölüm gövdesindeki BLOK indeksi (aşağıda), `b` yoksa (web yazdı ya da eski sürüm) `p` ile konumlanır. `b` varsa mobil `b`yi `p`ye TERCİH eder (aynı HTML'de cihazdan bağımsız kesin konum). Web `b` yazmaz; yani `b` varlığı "son yazan mobil" demektir ve bayat olamaz. Çizgi roman locator'ı değişmez (sayfa indeksi dizgisi). Yer imleri (`bookmarks.locator`) mobilde `b`siz yazılmaya devam eder: `{"ch":N,"p":R}` (web ile birebir).
+Blok tanımı (JS ve tek doğruluk kaynağı): `BLOCK_SEL = 'p,h1,h2,h3,h4,h5,h6,li,pre,figure,tr,dt,dd'`; `blocks` = `document.body.querySelectorAll(BLOCK_SEL)` içinde, kendi içinde başka `BLOCK_SEL` öğesi OLMAYAN ve (boş olmayan `textContent` ya da içinde `img`) olanlar, belge sırasıyla. Liste boşsa `document.body.children`. Sunucu aynı sanitize edilmiş HTML'i verdiği için indeks cihazlar arasında tutarlıdır.
+
+`KÖK/ui/reader/text/Locator.kt` (G-H6, saf Kotlin; `org.json` KULLANILMAZ — JVM birim testinde yok):
+```kotlin
+package io.github.mustafabayramguven.readcrab.ui.reader.text
+
+import java.util.Locale
+
+data class TextLocator(val ch: Int, val p: Double, val b: Int?)
+
+object Locator {
+    private val RE = Regex("""^\{\s*"ch"\s*:\s*(\d+)\s*,\s*"p"\s*:\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\s*(?:,\s*"b"\s*:\s*(\d+)\s*)?\}$""")
+
+    /** Web (`{"ch","p"}`) ve mobil (`{"ch","p","b"}`) biçimlerini okur; geçersizse null. `p` [0,1]'e kırpılır. */
+    fun parse(s: String): TextLocator? {
+        val m = RE.matchEntire(s.trim()) ?: return null
+        val ch = m.groupValues[1].toIntOrNull() ?: return null
+        val p = m.groupValues[2].toDoubleOrNull()?.takeIf { it.isFinite() } ?: return null
+        val b = m.groupValues[3].takeIf { it.isNotEmpty() }?.toIntOrNull()
+        return TextLocator(ch, p.coerceIn(0.0, 1.0), b)
+    }
+
+    /** Web ile uyumlu; `b` null/negatifse yazılmaz. */
+    fun build(ch: Int, p: Double, b: Int?): String =
+        "{\"ch\":$ch,\"p\":${"%.6f".format(Locale.ROOT, p.coerceIn(0.0, 1.0))}" +
+            (if (b != null && b >= 0) ",\"b\":$b" else "") + "}"
+}
+```
+`TESTK/ui/reader/text/LocatorTest.kt` (JUnit4): (1) `parse("{\"ch\":3,\"p\":0.42}") == TextLocator(3, 0.42, null)` (web biçimi); (2) `parse(build(2, 0.123456, 17)) == TextLocator(2, 0.123456, 17)`; (3) `build(2, 0.5, null) == "{\"ch\":2,\"p\":0.500000}"` ve `build(2, 0.5, -1)` aynı; (4) `parse("")`, `parse("5")`, `parse("{\"ch\":-1,\"p\":0.1}")`, `parse("{\"p\":0.1}")` hepsi null; (5) `parse("{\"ch\":1,\"p\":1.7}")?.p == 1.0`; (6) uzunluk: `build(9999, 1.0, 99999).length <= 200`.
+
+### 11.4 Çekirdek: başka cihaz konumu önerisi (C5) ve eşitleme durumu
+
+**Şema** — `CORE/src/migrations/0002_remote_pos.sql` (YENİ, `user_version` 2):
+```sql
+ALTER TABLE progress ADD COLUMN remote_locator TEXT NOT NULL DEFAULT '';
+ALTER TABLE progress ADD COLUMN remote_percent REAL NOT NULL DEFAULT 0;
+ALTER TABLE progress ADD COLUMN remote_status TEXT NOT NULL DEFAULT '';
+ALTER TABLE progress ADD COLUMN remote_updated_at INTEGER NOT NULL DEFAULT 0;   -- 0: öneri yok
+ALTER TABLE progress ADD COLUMN declined_ts INTEGER NOT NULL DEFAULT 0;         -- "Burada kal" denen sunucu damgası
+```
+`db.rs`: `const MIGRATION_0002: &str = include_str!("migrations/0002_remote_pos.sql");` ve `open` içinde, mevcut `user_version < 1` bloğundan sonra aynı kalıpla: `let uv: i32 = ...pragma_query_value(...)`; `if uv < 2 { tx.execute_batch(MIGRATION_0002)?; tx.pragma_update(None, "user_version", 2)?; tx.commit()?; }`. `migrates_and_kv_roundtrip` testine `user_version == 2` doğrulaması eklenir.
+
+**Kural (kesin).** Yerel satırda `locator != ''` ve sunucu kaydı `locator != ''`, `locator`lar FARKLI ve `dto.updated_at > yerel.updated_at` ise sunucu verisi UYGULANMAZ, öneri olarak saklanır. Bunun dışındaki her durumda `merge_progress` sonucu aynen uygulanır (yerelde konum yoksa sunucununki sessizce alınır). Aynı sunucu damgası için (`declined_ts == dto.updated_at`) tekrar öneri üretilmez. Yerel bekleyen işlem varsa ve sunucu daha yeniyse: yerel işlem KORUNUR (iptal edilmez), öneri saklanır; itmede sunucu `applied:false` dönünce bayraklar zaten düşer.
+`sync.rs`:
+```rust
+/// Yerelde bir konum var; sunucununki farklı ve daha yeni: sessizce ezmek yerine kullanıcıya sorulur.
+pub fn suggest_instead(local_locator: &str, local_updated_at: i64, dto: &ProgressDto) -> bool {
+    !local_locator.is_empty()
+        && !dto.locator.is_empty()
+        && local_locator != dto.locator
+        && dto.updated_at > local_updated_at
+}
+```
+`apply_progress` (mevcut imza `-> Result<bool, CoreError>` AYNI; `true` = sunucu verisi yerele UYGULANDI): yerel satır sorgusu `SELECT locator, updated_at, p_dirty <> 0 OR s_dirty <> 0, declined_ts FROM progress WHERE book_id = ?1` olur; `Merge::TakeServer` dalının başında:
+```rust
+if let Some((loc, upd, _, declined)) = &local {
+    if suggest_instead(loc, *upd, dto) {
+        if *declined != dto.updated_at {
+            c.execute(
+                "UPDATE progress SET remote_locator = ?2, remote_percent = ?3, remote_status = ?4,
+                                     remote_updated_at = ?5 WHERE book_id = ?1",
+                params![book_id, dto.locator, clamp01(dto.percent),
+                        ReadStatus::from_db(&dto.status).as_str(), dto.updated_at],
+            )?;
+        }
+        return Ok(false);
+    }
+}
+```
+ve mevcut `INSERT ... ON CONFLICT DO UPDATE` içinde `SET` listesine `remote_locator = '', remote_percent = 0, remote_status = '', remote_updated_at = 0, declined_ts = 0` eklenir (uygulanan sunucu verisi eski öneriyi temizler). `Merge::KeepLocal` dalı DEĞİŞMEZ.
+`lib.rs` kayıt (diğer `Record`'ların yanına): `#[derive(Clone, Debug, uniffi::Record)] pub struct PositionSuggestion { pub locator: String, pub percent: f64, pub updated_at: i64 }`.
+`sync.rs` `#[uniffi::export] impl Core` içine (mevcut `pull_book` imzası DEĞİŞMEZ):
+```rust
+/// Bekleyen "başka cihaz konumu" önerisi; yoksa None. Ağ yok.
+pub fn position_suggestion(&self, book_id: i64) -> Result<Option<PositionSuggestion>, CoreError> {
+    self.with_db(|c| {
+        Ok(c.query_row(
+            "SELECT remote_locator, remote_percent, remote_updated_at FROM progress
+             WHERE book_id = ?1 AND remote_updated_at > 0 AND remote_updated_at > updated_at
+               AND remote_updated_at > declined_ts AND remote_locator <> ''",
+            [book_id],
+            |r| Ok(PositionSuggestion { locator: r.get(0)?, percent: r.get(1)?, updated_at: r.get(2)? }),
+        ).optional()?)
+    })
+}
+/// "Oraya git": sunucu konumu yerele uygulanır, bayraklar ve öneri temizlenir.
+pub fn accept_position(&self, book_id: i64) -> Result<(), CoreError> {
+    self.with_db(|c| {
+        c.execute(
+            "UPDATE progress SET locator = remote_locator, percent = remote_percent,
+                    status = CASE WHEN remote_status IN ('unread','reading','finished','dropped')
+                                  THEN remote_status ELSE status END,
+                    updated_at = remote_updated_at, p_dirty = 0, s_dirty = 0, last_op = '',
+                    remote_locator = '', remote_percent = 0, remote_status = '',
+                    remote_updated_at = 0, declined_ts = 0
+             WHERE book_id = ?1 AND remote_updated_at > 0",
+            [book_id],
+        )?;
+        Ok(())
+    })
+}
+/// "Burada kal": yerel konum korunur; aynı sunucu damgası için bir daha sorulmaz.
+pub fn decline_position(&self, book_id: i64) -> Result<(), CoreError> {
+    self.with_db(|c| {
+        c.execute(
+            "UPDATE progress SET declined_ts = remote_updated_at, remote_locator = '',
+                    remote_percent = 0, remote_status = '', remote_updated_at = 0
+             WHERE book_id = ?1 AND remote_updated_at > 0",
+            [book_id],
+        )?;
+        Ok(())
+    })
+}
+```
+`sync_push` (export): başarılı dönüşte (`Ok`) `sync_last_ok_at = now` yazılır ve `sync_last_error` silinir (gösterge "eşitlendi"ye dönebilsin); hata yolu aynen `record_error`. `sync_status()` DEĞİŞMEZ (`pending_ops` zaten bekleyen ilerleme/durum/yer imi/ping'i sayar).
+**Test güncellemeleri** `CORE/tests/sync.rs`: `stale_put_response_pulls_server_progress` — yerel `locator "5"` boş değil, sunucu `"9"` yeni ⇒ artık `get_progress` ⇒ `"5"` KALIR; doğrulamalar: `position_suggestion(11)` ⇒ `Some{locator:"9"}`, `pending_ops == 0`; `accept_position(11)` ⇒ `get_progress.locator == "9"` ve öneri `None`. `newer_server_progress_cancels_pending_local_op` — YENİDEN ADLANDIRILIR `newer_server_progress_is_suggested_and_local_op_kept`: `pull_book(11)` sonrası `get_progress.locator == "7"`, `pending_ops == 1`, `position_suggestion` ⇒ `Some{locator:"8"}`; `decline_position` ⇒ öneri `None`; ikinci `pull_book` ⇒ öneri HÂLÂ `None` (aynı damga sorulmaz) ve `get_progress.locator == "7"`; sunucu daha da yeni damgayla `"6"` döndürürse öneri yeniden `Some{locator:"6"}`. YENİ testler: `no_local_position_takes_server_silently` (yerel satır yok ⇒ `pull_book` sonrası `get_progress.locator == "9"`, öneri `None`); `equal_locator_is_not_suggested` (yerel ve sunucu `"5"`, sunucu daha yeni ⇒ öneri `None`, `percent/status` sunucudan gelir); `push_success_clears_error_and_stamps_ok` (önce `sync_push` Network hatası ⇒ `last_error` dolu; sunucu dönünce başarılı itme ⇒ `last_error == None`, `last_ok_at` dolu). `sync.rs` birim testleri: `suggest_instead` tablosu (boş yerel locator ⇒ false; boş sunucu locator ⇒ false; eşit locator ⇒ false; sunucu eşit damga ⇒ false; farklı+yeni ⇒ true). `CORE/tests/sync.rs::first_sync_builds_library...` DEĞİŞMEZ (yerel satır yok ⇒ sunucu alınır).
+
+### 11.5 Mobil: yalnız ön plan eşitleme (C1, C3, C4)
+
+**Silinenler:** `KÖK/work/Workers.kt` içinden `Scheduler.schedulePeriodicSync`, `Scheduler.kickSync` (EN SON görevde, 11.10 H12), `SyncWorker` sınıfı ve ilgili içe aktarmalar (`PeriodicWorkRequestBuilder`, `ExistingPeriodicWorkPolicy`). `RcApp.onCreate`: `if (core.session() != null) Scheduler.schedulePeriodicSync(this)` SİLİNİR; yerine eski kurulumlardan kalan işleri temizleyen iki satır (WorkManager veritabanında kalmışlardır): `WorkManager.getInstance(this).cancelUniqueWork("sync-periodic")` ve `cancelUniqueWork("sync-kick")`. `LoginScreen` (112–113), `SeriesScreen` (117), `SettingsScreen` (158 `cancelAll` KALIR), `ReaderCommon` (119), Comic (193, 265), Text (258, 441) içindeki `Scheduler.kickSync(...)` çağrıları `rc.sync.onLocalChange(2000)` olur (kitap/durum/yer imi değişikliği). Giriş başarısında `Scheduler.schedulePeriodicSync`/`kickSync` yerine `rc.sync.syncNow()`.
+**Geçiş notu:** H7 `Scheduler.kickSync`'i derleme kırılmasın diye GEÇİCİ olarak `fun kickSync(ctx: Context) { (ctx.applicationContext as RcApp).sync.onLocalChange(2000) }` biçiminde bırakır; son görev (H12) siler.
+
+**Yeni dosya `KÖK/sync/SyncCoordinator.kt`** (tek eşitleme motoru; `RcApp` alanı `val sync: SyncCoordinator by lazy { SyncCoordinator(this, appScope) }`):
+```kotlin
+enum class SyncKind { SYNCED, PENDING, OFFLINE, ERROR, SYNCING }
+data class SyncIndicator(val kind: SyncKind, val pending: Int, val lastOkAt: Long?, val error: String?)
+
+class SyncCoordinator(private val app: RcApp, private val scope: CoroutineScope) {
+    @Volatile var foreground: Boolean = false             // MainActivity onStart/onStop
+    val indicator: StateFlow<SyncIndicator>
+    val completed: SharedFlow<Unit>                       // her başarılı syncNow sonrası; Kütüphane listeyi yeniler
+    fun refresh()                                         // core.syncStatus() + bağlantıdan gösterge hesaplar (IO)
+    fun onLocalChange(pushDelayMs: Long)                  // yerel yazımdan sonra: refresh() + itmeyi sıraya al (0 = hemen)
+    fun syncNow()                                         // tam eşitleme: push + kütüphane + çekme (core.syncNow)
+    fun onForeground()                                    // foreground = true; oturum varsa ve çevrimiçiyse syncNow()
+}
+```
+Davranış (kesin):
+- **Tek tüketici:** `private val pushSignal = Channel<Unit>(Channel.CONFLATED)`; `init`te `scope.launch(Dispatchers.IO) { for (u in pushSignal) pushOnce() }`. `onLocalChange(0)` ⇒ `refresh()` + `pushSignal.trySend(Unit)`; `onLocalChange(d > 0)` ⇒ `refresh()` + önceki `debounceJob`u iptal et, `debounceJob = scope.launch { delay(d); pushSignal.trySend(Unit) }`. Böylece her itme sıralıdır; en son yerel konum kazanır (çekirdekte satır zaten tek: kuyruk = `progress` satırı).
+- `pushOnce()`: `app.core.session() == null` ya da `!app.connectivity.online.value` ⇒ yalnız `refresh()`; aksi halde `mutex.withLock { core.syncPush() }`; `CoreException.Unauthorized` ⇒ `app.prefs.update { it.copy(needsRelogin = true) }`; diğer `CoreException` yutulur (kuyruk çekirdekte durur); her durumda `refresh()`.
+- `syncNow()`: `scope.launch(Dispatchers.IO)`: oturum yoksa dön; `syncing.value = true` ⇒ gösterge `SYNCING`; `mutex.withLock { core.syncNow() }`; başarıda `completed.emit(Unit)`; `Unauthorized` ⇒ `needsRelogin = true`; `finally { syncing.value = false; refresh() }`. Aynı anda ikinci `syncNow` çağrısı mutex'te bekler (tek uçuş).
+- `refresh()`: `val s = core.syncStatus()`; gösterge: `syncing` ⇒ SYNCING; `!online` ⇒ OFFLINE; `s.lastError != null && s.pendingOps > 0` ⇒ ERROR; `s.pendingOps > 0` ⇒ PENDING; yoksa SYNCED. `pending = s.pendingOps`, `lastOkAt = s.lastOkAt`, `error = s.lastError`.
+- **Bağlantı geri gelince** (yalnız uygulama öndeyken): `init`te `scope.launch { app.connectivity.online.collect { on -> if (on && foreground && wasOffline) syncNow(); wasOffline = !on; refresh() } }` (`wasOffline` başlangıçta `!online.value`).
+- `onForeground()`: `foreground = true; if (oturum && online) syncNow() else refresh()`. `MainActivity.onStart` ⇒ `(application as RcApp).sync.onForeground()`; `onStop` ⇒ `sync.foreground = false`. Arka planda hiçbir iş zamanlanmaz.
+- **Kütüphane yenileme** ve **Ayarlar > Şimdi eşitle** doğrudan `rc.sync.syncNow()`; `LibraryViewModel.syncNow()` kaldırılır, `refreshing = indicator.kind == SYNCING` (akıştan), `rc.sync.completed` toplanınca `reload()`; hata mesajı `indicator.error` üzerinden (snackbar için `library_refresh_failed`). Açılışta otomatik eşitleme `onForeground()` yapar (Kütüphane VM'indeki `if (online) syncNow()` kaldırılır).
+- **Okuma izleyici (`ReadingTracker`)**: 30 sn'lik `syncPush` döngüsü kalkar; yerine `if (tick % 30 == 0) app.sync.onLocalChange(0)`; `stop()` içindeki `Scheduler.kickSync(app)` ⇒ `app.sync.onLocalChange(0)` ("okuyucudan çıkarken hemen"). Hem `ping` hem ilerleme aynı itmede gider.
+- **Kural özeti (kabul):** metin kaydırma modu: paragraf değişince yerel kayıt anında + `onLocalChange(2000)`; metin sayfa modu: her sayfa çevirmede yerel kayıt + `onLocalChange(0)`; çizgi roman: her sayfa değişiminde yerel kayıt + `onLocalChange(0)`; durum/yer imi değişimi: `onLocalChange(2000)`; çıkış: `onLocalChange(0)`.
+
+**Gösterge bileşeni** — yeni `KÖK/ui/common/SyncIndicator.kt`:
+```kotlin
+@Composable
+fun SyncIndicatorButton(modifier: Modifier = Modifier)
+```
+`LocalContext.current.applicationContext as RcApp` ile `app.sync.indicator` toplanır. `IconButton` içinde `BadgedBox(badge = { if (kind == PENDING && pending > 0) Badge { Text(pending.toString()) } })` ve simge: SYNCED `Icons.Outlined.CloudDone`, PENDING `Icons.Outlined.CloudUpload`, OFFLINE `Icons.Outlined.CloudOff`, ERROR `Icons.Outlined.SyncProblem`, SYNCING `CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)`. `contentDescription` = ilgili dizge (11.9: `sync_state_*`). Simge rengi: SYNCED/PENDING/OFFLINE `onSurfaceVariant`, ERROR `error`. Dokununca `AlertDialog`: başlık = durum metni; gövde = `sync_dialog_last` (veya `sync_dialog_never`) + bekleyen `sync_state_pending` satırı + hata varsa `sync_dialog_error`; `confirmButton` `TextButton(settings_sync_now)` ⇒ `app.sync.syncNow()`, `dismissButton` `action_close`. Durum yalnız renk değil: simge + `contentDescription` + diyalog metni.
+Yerleşim: Kütüphane `TopAppBar.actions` = [istatistik, eşitleme göstergesi, arama, ayarlar]; Metin ve Çizgi roman üst çubuğu = [geri, başlık, `SyncIndicatorButton`, yer imi, …] (11.6/11.7).
+
+### 11.6 Metin okuyucu: sayfa modu, konum, ayar erişimi (D, C2, C3, C5, E2)
+
+**Kök nedenler (D) — koddan:**
+1. `TextReaderScreen.kt:541` — `.then(if (state.prefs.immersive) Modifier else Modifier.windowInsetsPadding(WindowInsets.systemBars))`: varsayılan `immersive = true` olduğundan WebView hiçbir inset boşluğu almıyor; `ReaderWindowEffects` sistem çubuklarını gizlese de ekran kesiği (`displayCutout`), yuvarlak köşeler ve sistem hareket (geri) kenarları hiç hesaba katılmıyor (`systemBars` zaten kesiği içermez). Metin kesik/köşe altına girer ve kenar kaydırmaları geri hareketine çarpar. `reader.html:5` `viewport-fit=cover` bunu pekiştirir.
+2. `reader.js:38` — `m = Math.max(16 + pw*mg/100, (pw - 38*fs)/2)`: yan boşluk tabanı 16 px; kenarlara yapışık sütun. `frame.css:11,55` (`padding: 80px … 96px`) ve `reader.js:12` `BAR_V = 176` dikey 176 px sabit rezerv: üst/alt çubuk varsayımı; çubuklar kapalıyken boşluk, açıkken yine örtüşme.
+3. `frame.css:33-38` + `reader.js:71-79` — sayfa modunda `html.paged { overflow-x:auto; touch-action:pan-x }`: yerel serbest yatay kaydırma + 120 ms gecikmeli yapışma (`snapSoon`). Parmak bırakılınca sayfalar arası ara konumda kalır, sonra zıplar; `pw` kesirliyse sütun adımı ile `scrollLeft` yuvarlaması kayar; hızlı çevirmede iki sayfa atlanır.
+4. `reader.js:50` — `pageIdx = round(ratio*(pageTotal-1))` ve her `relayout` (yazı boyutu, döndürme, `fonts loadingdone`, sistem çubuğu gelip gidince `innerHeight` değişimi) konumu ORANDAN yeniden türetir; toplam sayfa ±1 değişince sayfa kayar ("konum korunmuyor"). `reader.js:131` ses tuşu/dokunma çevirmesi `report()` ile oranı kaydeder, blok bilgisi yok.
+5. `reader.js:104` dokunma bölgesi `clientX / innerWidth` (WebView tam ekran, kesiksiz) — kenarlardaki geri hareket bölgesine denk gelir.
+
+**Çözüm (kök):** WebView görünüm alanını `safeDrawing` içine al (kesik + sistem çubukları + klavye), `systemGestureExclusion` iste; sayfa geometrisini kendi CSS'inde (`reader.css`) tanımla (176 px rezerv yok, taban yan boşluk 24 px); sayfa modunda yerel kaydırmayı KAPAT, sayfa geçişini `pointer` olaylarıyla (kaydırma/dokunma/tuş/ses) ayrık yap ve `scrollLeft`'i her zaman `i*pw` tamsayı yap; konumu ORAN yerine BLOK indeksiyle (`b`) koru. Web `web/reader-text.js` sayfa modu referans: aynı sütun mantığı (`column-width = pw-2m`, `column-gap = 2m`, adım = `pw`), aynı `m` formülü (`max(taban + pw*mg/100, (pw - 38*fs)/2)`); farklar: (a) web iframe'i yerel kaydırır, mobil ayrık; (b) web 80/96 px rezerv kullanır, mobil 32/32; (c) web konumu oranla, mobil blokla korur.
+
+`TextReaderScreen.kt` WebView çağrısı (satır ~536–542 yerine):
+```kotlin
+ReaderWebView(
+    commands = vm.commands,
+    bgColor = bgInt,
+    onMessage = { vm.onEvent(TextEvent.Web(it)) },
+    modifier = Modifier
+        .fillMaxSize()
+        .windowInsetsPadding(WindowInsets.safeDrawing)
+        .systemGestureExclusion(),
+)
+```
+(`import androidx.compose.foundation.layout.safeDrawing`, `import androidx.compose.foundation.layout.systemGestureExclusion`; `import androidx.compose.foundation.layout.systemBars` kullanılmıyorsa silinir.) `reader.html`: `viewport` meta'sı `width=device-width,initial-scale=1` (viewport-fit KALKAR), `reader.css` bağlantısı `frame.css`'ten SONRA eklenir:
+```html
+<link rel="stylesheet" href="/static/reader-fonts.css">
+<link rel="stylesheet" href="/static/frame.css">
+<link rel="stylesheet" href="/static/reader.css">
+```
+`android/app/src/main/assets/reader.css` (YENİ, birebir):
+```css
+html { -webkit-tap-highlight-color: transparent; }
+html.paged { overflow: hidden; touch-action: none; -webkit-user-select: none; user-select: none; }
+html.paged body {
+  box-sizing: border-box; margin: 0; max-width: none;
+  width: var(--pw); height: var(--ph);
+  padding: var(--mt) var(--m) var(--mb);
+  column-width: calc(var(--pw) - 2 * var(--m));
+  column-gap: calc(2 * var(--m));
+  column-fill: auto;
+}
+#pg {
+  position: fixed; left: 0; right: 0; bottom: 8px; text-align: center;
+  font: 12px/1 system-ui, sans-serif; color: var(--fg); opacity: 0.55; pointer-events: none;
+}
+html:not(.paged) #pg { display: none; }
+```
+Geometri: `--pw`=`innerWidth`, `--ph`=`innerHeight` (WebView zaten güvenli alanda), `--m` yan boşluk, `--mt`=`--mb`=32px, `--bh`=`ph-64`px (görsel azami yüksekliği, `frame.css` `html.paged img` kuralı kullanır). Kaydırma modu geometrisi DEĞİŞMEZ (`frame.css` gövde dolguları 80/96).
+
+`android/app/src/main/assets/reader.js` — TAM YENİ DOSYA (eskisinin yerine, birebir):
+```js
+(function () {
+  'use strict';
+  var FONTS = {
+    literata: '"Literata Variable", Georgia, "Noto Serif", serif',
+    merriweather: '"Merriweather Variable", Georgia, "Noto Serif", serif',
+    'source-serif': '"Source Serif 4 Variable", Georgia, "Noto Serif", serif',
+    'eb-garamond': '"EB Garamond Variable", Georgia, "Noto Serif", serif',
+    inter: '"Inter Variable", system-ui, sans-serif',
+    atkinson: '"Atkinson Hyperlegible", system-ui, sans-serif',
+    lexend: '"Lexend Variable", system-ui, sans-serif'
+  };
+  var BLOCK_SEL = 'p,h1,h2,h3,h4,h5,h6,li,pre,figure,tr,dt,dd';
+  var MIN_M = 24, VPAD = 32, SWIPE = 40;
+  var root = document.documentElement;
+  var P = { mode: 'scroll', mg: 0, fs: 18, lh: 1.7, ws: 0, ls: 0, zones: true,
+            bg: '#FFFFFF', fg: '#000000', link: '#0000EE', font: 'literata', align: 'left' };
+  var ch = 0, ratio = 0, anchor = -1, pageIdx = 0, pageTotal = 1, blocks = [];
+  var ready = false, restoring = false, deferred = false, lastScrollAt = 0;
+  var lastBlock = -2, sentEnd = false, relT = null, down = null;
+  var pg = document.createElement('div');
+  pg.id = 'pg';
+  root.appendChild(pg);
+
+  function post(o) { try { Android.post(JSON.stringify(o)); } catch (e) {} }
+  function clamp01(v) { v = Number(v); return !isFinite(v) ? 0 : v < 0 ? 0 : v > 1 ? 1 : v; }
+  function se() { return document.scrollingElement || root; }
+  function paged() { return P.mode === 'page'; }
+
+  function collectBlocks() {
+    var all = Array.prototype.slice.call(document.body.querySelectorAll(BLOCK_SEL));
+    blocks = all.filter(function (e) {
+      return !e.querySelector(BLOCK_SEL) && ((e.textContent || '').trim() !== '' || !!e.querySelector('img'));
+    });
+    if (blocks.length === 0) blocks = Array.prototype.slice.call(document.body.children);
+  }
+  function firstRect(el) { var r = el.getClientRects(); return r.length ? r[0] : null; }
+  function pageOfBlock(i) {
+    var el = blocks[i], r = el && firstRect(el);
+    if (!r) return 0;
+    return Math.max(0, Math.min(pageTotal - 1, Math.floor((r.left + se().scrollLeft + 1) / window.innerWidth)));
+  }
+  function scrollTopOf(i) {
+    var el = blocks[i];
+    if (!el || i === 0) return 0;
+    return Math.max(0, Math.round(el.getBoundingClientRect().top + se().scrollTop - 8));
+  }
+  function blockAtPage(i) {          // sayfada başlayan ilk blok; yoksa sayfayı kaplayan blok
+    var pw = window.innerWidth, lo = i * pw, hi = lo + pw, sl = se().scrollLeft, cover = -1;
+    for (var k = 0; k < blocks.length; k++) {
+      var rs = blocks[k].getClientRects();
+      if (!rs.length) continue;
+      var l = rs[0].left + sl;
+      if (l >= hi - 1) break;
+      if (l >= lo - 1) return k;
+      if (rs[rs.length - 1].right + sl > lo + 1) cover = k;
+    }
+    return cover;
+  }
+  function blockAtScroll() {         // üstten görünür ilk blok (ikili arama)
+    if (!blocks.length) return -1;
+    var lo = 0, hi = blocks.length - 1;
+    while (lo < hi) {
+      var mid = (lo + hi) >> 1;
+      if (blocks[mid].getBoundingClientRect().bottom > 8) hi = mid; else lo = mid + 1;
+    }
+    return lo;
+  }
+  function footer() { pg.textContent = paged() ? (pageIdx + 1) + ' / ' + pageTotal : ''; }
+  // u: kullanıcı eylemi (kaydırma/çevirme) — yalnız u=1 olanlar kaydedilir
+  function report(u) {
+    footer();
+    post({ t: 'pos', ch: ch, p: Number(ratio.toFixed(6)), b: anchor, nb: blocks.length,
+           page: pageIdx, pages: pageTotal, u: u ? 1 : 0 });
+  }
+
+  function applyPrefs() {
+    var s = root.style;
+    s.setProperty('--bg', P.bg); s.setProperty('--fg', P.fg); s.setProperty('--link', P.link);
+    s.setProperty('--fs', P.fs + 'px'); s.setProperty('--lh', String(P.lh));
+    s.setProperty('--ws', P.ws + 'em'); s.setProperty('--ls', P.ls + 'em');
+    s.setProperty('--font', FONTS[P.font] || FONTS.literata);
+    s.setProperty('--align', P.align); s.setProperty('--hyph', P.align === 'justify' ? 'auto' : 'manual');
+    root.classList.toggle('paged', paged());
+  }
+
+  function relayout() {
+    if (!ready) return;
+    var pw = window.innerWidth, ph = window.innerHeight, e = se();
+    var m = Math.max(MIN_M + (pw * P.mg) / 100, (pw - 38 * P.fs) / 2);
+    var st = root.style;
+    st.setProperty('--pw', pw + 'px'); st.setProperty('--ph', ph + 'px'); st.setProperty('--m', m + 'px');
+    st.setProperty('--mt', VPAD + 'px'); st.setProperty('--mb', VPAD + 'px');
+    st.setProperty('--bh', Math.max(0, ph - 2 * VPAD) + 'px');
+    st.setProperty('--mx', Math.round((pw * P.mg) / 100) + 'px');
+    restoring = true;
+    var promoted = false;
+    if (paged()) {
+      var range = document.createRange();
+      range.selectNodeContents(document.body);
+      var right = range.getBoundingClientRect().right + e.scrollLeft;
+      pageTotal = Math.max(1, Math.ceil((right - 1) / pw));
+      pageIdx = anchor >= 0 ? pageOfBlock(anchor) : (pageTotal <= 1 ? 0 : Math.round(ratio * (pageTotal - 1)));
+      window.scrollTo(pageIdx * pw, 0);
+      ratio = pageTotal <= 1 ? 0 : pageIdx / (pageTotal - 1);
+      if (pageTotal <= 1) { ratio = 1; promoted = true; }  // tek sayfalık bölüm
+    } else {
+      pageTotal = 1; pageIdx = 0;
+      var max = Math.max(0, e.scrollHeight - e.clientHeight);
+      e.scrollTop = anchor >= 0 ? scrollTopOf(anchor) : Math.round(ratio * max);
+      if (max <= 2) { ratio = 1; promoted = true; }          // tek ekranlık bölüm
+      else ratio = clamp01(e.scrollTop / max);
+    }
+    if (anchor < 0) anchor = paged() ? blockAtPage(pageIdx) : blockAtScroll();
+    lastBlock = anchor;
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () {
+        restoring = false;
+        if (deferred) { deferred = false; onScroll(); }
+      });
+    });
+    report(promoted);   // tek ekranlık bölüm okunmuş sayılır (web ile aynı); diğer yerleşimler kaydedilmez
+  }
+  function relayoutSoon() {
+    clearTimeout(relT);
+    relT = setTimeout(function () { relT = null; relayout(); }, 100);
+  }
+
+  function onScroll() {                    // yalnız kaydırma modu
+    lastScrollAt = Date.now();
+    if (restoring) { deferred = true; return; }
+    if (paged()) return;
+    var e = se(), max = Math.max(0, e.scrollHeight - e.clientHeight);
+    var r = max > 0 ? clamp01(e.scrollTop / max) : 0;
+    if (e.scrollTop + e.clientHeight >= e.scrollHeight - 2) r = 1;
+    ratio = r;
+    var b = blockAtScroll();
+    var end = r >= 1 && !sentEnd;
+    if (b !== lastBlock || end) {
+      anchor = b; lastBlock = b;
+      if (r >= 1) sentEnd = true;
+      report(true);
+    }
+  }
+  window.addEventListener('scroll', onScroll, { passive: true });
+  window.addEventListener('resize', relayoutSoon);
+  document.addEventListener('load', relayoutSoon, true);
+  if (document.fonts && document.fonts.addEventListener) document.fonts.addEventListener('loadingdone', relayoutSoon);
+
+  function turn(d) {                       // sayfa modu: ayrık sayfa; edge: bölüm sınırı
+    var i = pageIdx + d;
+    if (i >= pageTotal) { post({ t: 'edge', d: 1 }); return; }
+    if (i < 0) { post({ t: 'edge', d: -1 }); return; }
+    pageIdx = i;
+    ratio = pageTotal <= 1 ? 0 : i / (pageTotal - 1);
+    window.scrollTo(i * window.innerWidth, 0);
+    anchor = blockAtPage(i);
+    report(true);
+  }
+
+  document.addEventListener('pointerdown', function (e) { down = { x: e.clientX, y: e.clientY }; }, { passive: true });
+  document.addEventListener('pointerup', function (e) {
+    if (!down) return;
+    var dx = e.clientX - down.x, dy = e.clientY - down.y;
+    down = null;
+    if (paged() && Math.abs(dx) >= SWIPE && Math.abs(dx) > 1.5 * Math.abs(dy)) { turn(dx < 0 ? 1 : -1); return; }
+    if (Math.abs(dx) > 10 || Math.abs(dy) > 10) return;
+    if (!paged() && Date.now() - lastScrollAt < 250) return;
+    if (paged() && P.zones) {
+      var z = e.clientX / window.innerWidth;
+      if (z < 1 / 3) { turn(-1); return; }
+      if (z > 2 / 3) { turn(1); return; }
+    }
+    post({ t: 'tap' });
+  });
+  document.addEventListener('click', function (e) { e.preventDefault(); });  // dış bağlantı yok
+
+  var RC = (window.RC = {});
+  RC.setPrefs = function (p) { P = p; applyPrefs(); relayoutSoon(); };
+  RC.load = function (path, c, r, b) {
+    ready = false; ch = c; ratio = clamp01(r); anchor = (typeof b === 'number' && b >= 0) ? b : -1; sentEnd = false;
+    fetch(path).then(function (res) {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.text();
+    }).then(function (html) {
+      document.body.innerHTML = html;
+      collectBlocks();
+      if (anchor >= blocks.length) anchor = -1;
+      ready = true; applyPrefs(); relayout();
+      post({ t: 'loaded', ch: ch, pages: pageTotal });
+    }).catch(function (err) { post({ t: 'error', msg: String(err) }); });
+  };
+  RC.page = function (d) {                 // Kotlin: ses tuşları / düğmeler
+    if (!ready) return;
+    if (paged()) { turn(d); return; }
+    var e = se();
+    if (d > 0 && e.scrollTop + e.clientHeight >= e.scrollHeight - 2) { post({ t: 'edge', d: 1 }); return; }
+    if (d < 0 && e.scrollTop <= 0) { post({ t: 'edge', d: -1 }); return; }
+    e.scrollTop += d * Math.max(40, Math.floor(e.clientHeight * 0.9));
+  };
+  post({ t: 'ready' });
+})();
+```
+`ReaderWebView.kt`: `WebCommand.Load` genişler: `data class Load(val path: String, val ch: Int, val ratio: Double, val block: Int) : WebCommand` ve JS çağrısı `"RC.load(${JSONObject.quote(c.path)}, ${c.ch}, ${c.ratio}, ${c.block})"`; `SetPrefs` JSON alanları (11.8 ile): `bg, fg, link, font, fs, lh, ws, ls, align, mode, mg, zones`.
+
+`TextReaderViewModel` değişiklikleri (kesin):
+- Durum: `TextState.barsVisible` varsayılanı **false**; yeni alanlar `val suggestion: PositionSuggestion? = null`, `val blocks: Int = 0`. `TextEvent`'e eklenir: `data object AcceptSuggestion : TextEvent`, `data object DeclineSuggestion : TextEvent`, `data class PatchPrefs(val f: (UiPrefs) -> UiPrefs) : TextEvent`. Özel `parseLocator`/`locatorOf` YERİNE `Locator` (11.3).
+- `prefsJson`: `.put("ws", p.wordSpacing.toDouble()).put("ls", p.letterSpacing.toDouble())` eklenir (`round(x*100)/100.0`).
+- `load(id)`: `getBook`, `textInfo`, çevrimiçiyse mevcut 4 sn'lik `pullBook`; sonra `val sug = runCatching { core.positionSuggestion(id) }.getOrNull()`. `sug != null` ⇒ `_state.update { it.copy(suggestion = sug, loading = true) }` ve web BAŞLATILMAZ (`dataReady = false` kalır); `AcceptSuggestion` ⇒ `core.acceptPosition(id)`; `DeclineSuggestion` ⇒ `core.declinePosition(id)`; ikisinde de `suggestion = null`, başlangıç konumu `core.getProgress(id).locator`'dan yeniden okunur, `dataReady = true; startWeb()`. `sug == null` ⇒ eski akış. Başlangıç konumu: `Locator.parse(locator)` ⇒ `ch` (aralık dışıysa 0), `p`, `b`; `loadChapter(ch, p, b)`.
+- `loadChapter(ch, ratio, block: Int = -1)`: `WebCommand.Load("/book/$id/c$target.html", target, r, block)`.
+- `handleWeb("pos")`: `onPos(ch, p, b = o.optInt("b", -1), page, pages, user = o.optInt("u") == 1)`. UI durumu her mesajda güncellenir (yüzde, sayfa göstergesi, yer imi işareti, sonraki cilt kartı); KAYIT yalnız `user == true` iken: `val loc = Locator.build(ch, ratio, b.takeIf { it >= 0 })`; `loc == lastSavedLocator` ise çık; aksi halde `saveChannel.trySend(PendingSave(bookId, loc, percent))` ve `rc.sync.onLocalChange(if (paged) 0 else 2000)`. `saveChannel = Channel<PendingSave>(Channel.CONFLATED)`; tek tüketici `viewModelScope.launch(Dispatchers.IO) { for (s in saveChannel) core.saveProgress(s.bookId, s.locator, s.percent, LocalDate.now().toString()) }`. Eski 500 ms `saveJob`/`delay(500)` KALDIRILIR. `onCleared`: kanalda kalan son kayıt `CoroutineScope(SupervisorJob()+Dispatchers.IO).launch { core.saveProgress(...) }` ile yazılır.
+- Yer imi: `Locator.build(ch, ratio, null)` (b'siz, web ile birebir). `isNear` mevcut mantığı korur (`Locator.parse` ile).
+- `OpenBookmark`/`GoToc`/`OpenHit`: `loadChapter(ch, p)` (block = -1).
+- `PatchPrefs` ⇒ `rc.prefs.update(e.f)`; `prefs` akışı zaten `emitPrefs()` çağırır (anında uygulanır, konum blokla korunur).
+- `tracker.addPage("$ch:$b")` (blok değişince; `b >= 0` değilse `"$ch:${page}"`).
+
+`TextReaderScreen` arayüz değişiklikleri: (1) `TextTopBar` = [geri, başlık(ağırlık 1), `SyncIndicatorButton`, yer imi, ara, içindekiler]; ayar simgesi buradan KALKAR. (2) `TextBottomBar` = `LinearProgressIndicator` + `Row`: [önceki bölüm `IconButton`, `Column(weight 1)` (`reader_chapter_percent` + sayfa modunda `reader_page_of`), sonraki bölüm `IconButton`, `TextButton(onClick = OpenSheet(SETTINGS))` { `Icon(Icons.Outlined.Settings)` + `Spacer(4.dp)` + `Text(stringResource(R.string.reader_settings_label))` }]. (3) İlk açılış ipucu `ReaderHint` (11.7). (4) `suggestion != null` iken `AlertDialog` (11.7 `RemotePositionDialog`). (5) Ayar alt sayfası `ReaderSettingsSheet` iskeletiyle (11.7) yeniden yazılır; sıra ve seçenekler web ile eşit (E2):
+ 1. Bölüm "Tema" (`reader_theme`): `ReaderChoiceRow` seçenekleri `auto, light, dark, sepia, black` (etiketler `reader_theme_*`; "Otomatik" web'de seçim yokken uygulama modunu izleme davranışının açık seçenek hâlidir).
+ 2. "Yazı tipi" (`reader_font`): `TEXT_FONTS` 7 çip.
+ 3. Bölüm "Metin": `ReaderSliderRow` × 5 — yazı boyutu `14f..28f` adım 2 (`steps = 6`, değer `"%d px"`), satır aralığı `1.2f..2.2f` adım 0.1 (`steps = 9`), kelime arası `0f..0.5f` adım 0.05 (`steps = 9`, `"%.2f em"`), harf arası `0f..0.1f` adım 0.01 (`steps = 9`, `"%.2f em"`), kenar boşluğu `0f..20f` adım 1 (`steps = 19`, `"%d%%"`). Değerler `Prefs.update`te adım yuvarlaması (`round(v/step)*step`) ile yazılır.
+ 4. Bölüm "Sayfa": hizalama (`left`/`justify`, 2 seçenek segmented) ve okuma biçimi (`scroll`/`page`, segmented; sıra web gibi: Kaydırma, Sayfa).
+ 5. Bölüm "Davranış": `ReaderSwitchRow` × 4: dokunma bölgeleri, ses tuşlarıyla çevir, ekran açık kalsın, tam ekran (`settings_*` dizgeleri).
+ Değişiklik anında `PatchPrefs` ⇒ uygulanır; sayfa/kaydırma geçişinde konum blok indeksiyle korunur.
+
+**E1 kök nedeni** (11.7'de de): bkz. 11.7.
+
+### 11.7 Okuyucu ortak parçalar, ayar erişimi, çizgi roman (E1, E3, E4, C3)
+
+**Kök nedenler (E) — koddan:**
+- Çizgi roman: `ComicReaderScreen.kt:520-577` `ComicTopBar` — ayara giden TEK yol ⋮ simgesi (`:554` `DropdownMenu`) ve içinde yalnız 3 okuma yönü öğesi var; "Ayarlar" adlı hiçbir öğe/düğme yok. Dokunma bölgeleri, ses tuşları, ekran açık, tema/zemin yalnız genel Ayarlar ekranındaydı (`SettingsScreen`), okuyucudan erişilemiyordu. Zemin `ComicReaderScreen.kt` içinde sabit `Color.Black`.
+- Metin: ayar yalnız `TextTopBar` içinde etiketsiz küçük bir dişli simgesiydi (`TextReaderScreen.kt:641`), 4 başka simgeyle aynı satırda; çubuklar yalnız ekranın ORTASINA dokunmayla açılıp kapanıyor ve bunu söyleyen hiçbir ipucu yok (`TextState.barsVisible` ilk açılışta `true` olup ilk dokunmada kapanıyor; kullanıcı kitaba dokununca çubuk kayboluyor ve geri açma yolunu bilmiyor). Alt sayfa web'deki kelime/harf aralığını içermiyordu (`SettingsSheet`, `:770`).
+- Dokunma köprüsü bozuk DEĞİL: JS `tap` → VM `barsVisible` ters çevirir (`handleWeb`, `"tap"`), kodla doğrulandı; cihazda doğrulanamayan tek şey budur (11.11 elle liste #4).
+
+**Çözüm.** Her iki okuyucuda: `barsVisible` varsayılanı **false** (çizgi roman `ComicState.barsVisible = false`); ekran ortasına dokunmak çubukları açar/kapatır; alt çubukta HER ZAMAN etiketli "Ayarlar" düğmesi vardır; ilk açılışta (Prefs bayrağı `readerHintSeen`) 5 sn ipucu.
+
+`ReaderCommon.kt` — YENİ/DEĞİŞEN bileşenler (E4, birebir imzalar; hepsi iki okuyucuda aynı):
+```kotlin
+// Ölçüler: yatay dolgu Dimens.gutter (16.dp), bölüm başlığı üst boşluğu Dimens.s4 (16.dp), satır en az 48.dp,
+// slider satırı: etiket+değer üstte, altında Slider, dikey aralık Dimens.s2 (8.dp), alt dolgu Dimens.s5 (24.dp)
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ReaderSettingsSheet(title: String, onDismiss: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+    ) {
+        Column(
+            Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
+                .navigationBarsPadding()
+                .padding(horizontal = Dimens.gutter).padding(bottom = Dimens.s5),
+        ) {
+            Text(title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(bottom = Dimens.s2))
+            content()
+        }
+    }
+}
+
+@Composable
+fun ColumnScope.ReaderSection(title: String, first: Boolean = false, content: @Composable ColumnScope.() -> Unit) {
+    if (!first) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, modifier = Modifier.padding(top = Dimens.s4))
+    Text(title, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary,
+         modifier = Modifier.padding(top = Dimens.s4, bottom = Dimens.s2))
+    content()
+}
+
+@Composable
+fun ReaderSliderRow(label: String, valueText: String, value: Float, range: ClosedFloatingPointRange<Float>,
+                    steps: Int, onChange: (Float) -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+        Text(valueText, style = MaterialTheme.typography.labelLarge)
+    }
+    Slider(value = value, onValueChange = onChange, valueRange = range, steps = steps)
+}
+
+@Composable
+fun ReaderChoiceRow(options: List<Pair<String, String>>, selected: String, onSelect: (String) -> Unit) {
+    // en çok 3 seçenek: segmented; fazlası: yatay kaydırmalı FilterChip
+    if (options.size <= 3) {
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+            options.forEachIndexed { i, (key, label) ->
+                SegmentedButton(selected = selected == key, onClick = { onSelect(key) },
+                    shape = SegmentedButtonDefaults.itemShape(i, options.size)) { Text(label) }
+            }
+        }
+    } else {
+        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(Dimens.s2)) {
+            for ((key, label) in options) FilterChip(selected = selected == key, onClick = { onSelect(key) }, label = { Text(label) })
+        }
+    }
+}
+
+@Composable
+fun ReaderSwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+        Switch(checked = checked, onCheckedChange = onChange)
+    }
+}
+
+/** İlk açılış ipucu: bir kez, 5 sn. `Box` içinde çağrılır. */
+@Composable
+fun BoxScope.ReaderHint(prefs: UiPrefs, onSeen: () -> Unit) {
+    if (prefs.readerHintSeen) return
+    LaunchedEffect(Unit) { delay(5000); onSeen() }
+    Surface(
+        shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.inverseSurface,
+        modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 96.dp),
+    ) {
+        Text(stringResource(R.string.reader_hint_menu), color = MaterialTheme.colorScheme.inverseOnSurface,
+             style = MaterialTheme.typography.labelLarge,
+             modifier = Modifier.padding(horizontal = Dimens.s4, vertical = Dimens.s3))
+    }
+}
+
+/** C5: başka cihaz konumu sorusu. `where` çağıran tarafından biçimlenir. */
+@Composable
+fun RemotePositionDialog(where: String, onGo: () -> Unit, onStay: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onStay,
+        title = { Text(stringResource(R.string.reader_remote_title)) },
+        text = { Text(stringResource(R.string.reader_remote_body, where)) },
+        confirmButton = { TextButton(onClick = onGo) { Text(stringResource(R.string.reader_remote_go)) } },
+        dismissButton = { TextButton(onClick = onStay) { Text(stringResource(R.string.reader_remote_stay)) } },
+    )
+}
+```
+`onSeen` her iki ekranda `rc.prefs.update { it.copy(readerHintSeen = true) }`. `where` biçimi: metin `stringResource(reader_remote_chapter, ch + 1, (percent*100).roundToInt())` (`Locator.parse(sug.locator)`; ayrışmazsa `%${(percent*100).roundToInt()}`); çizgi roman `stringResource(reader_remote_page, locator.toInt() + 1, pageCount)`.
+Yeni içe aktarmalar `ReaderCommon.kt`: `ModalBottomSheet`'e ek `SingleChoiceSegmentedButtonRow, SegmentedButton, SegmentedButtonDefaults, FilterChip, Switch, HorizontalDivider, AlertDialog, TextButton, Surface, rememberModalBottomSheetState`; foundation `verticalScroll, horizontalScroll, rememberScrollState, heightIn, BoxScope`; `RoundedCornerShape`; `delay`.
+
+`ReadingTracker` (yalnız belirtilen değişiklikler; geri kalan aynı): `tick % 30 == 0` ⇒ `app.sync.onLocalChange(0)` (eski `runCatching { app.core.syncPush() }` SİLİNİR); `stop()` içinde `Scheduler.kickSync(app)` ⇒ `app.sync.onLocalChange(0)`.
+
+**Çizgi roman** (`ComicReaderScreen.kt`):
+- `ComicState`: `barsVisible = false`; yeni `val suggestion: PositionSuggestion? = null`, `val settingsOpen: Boolean = false`. `ComicEvent` ekleri: `data object OpenSettings`, `data object CloseSettings`, `data object AcceptSuggestion`, `data object DeclineSuggestion`, `data class PatchPrefs(val f: (UiPrefs) -> UiPrefs)`. `ComicTopBar`: [geri, başlık, `SyncIndicatorButton`, yer imi, yer imleri listesi]; ⋮ menüsü ve `DropdownMenu` KALDIRILIR (içe aktarmalar da). `ComicBottomBar`: sayfa göstergesi + `Slider` satırının ALTINA `Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End)` içinde `TextButton(onClick = OpenSettings) { Icon(Icons.Outlined.Settings, null); Spacer(4.dp); Text(stringResource(R.string.reader_settings_label)) }`.
+- Ayar alt sayfası (`settingsOpen` iken): `ReaderSettingsSheet(stringResource(R.string.comic_settings_title), onDismiss = CloseSettings)`: Bölüm "Okuma yönü" (`first = true`, `comic_direction`): `ReaderChoiceRow([ltr→comic_dir_ltr, rtl→comic_dir_rtl, webtoon→comic_dir_webtoon], state.mode)` ⇒ `SetMode`; Bölüm "Zemin" (`reader_background`): `ReaderChoiceRow([black→reader_theme_black, dark→reader_theme_dark, sepia→reader_theme_sepia, light→reader_theme_light], prefs.comicBg)` ⇒ `PatchPrefs { it.copy(comicBg = k) }`; Bölüm "Davranış" (`reader_section_behavior`): `ReaderSwitchRow` × 4 (dokunma bölgeleri, ses tuşlarıyla çevir, ekran açık kalsın, tam ekran).
+- Zemin: `Box(Modifier.fillMaxSize().background(Color.Black))` ⇒ `background(comicBgColor(prefs.comicBg))` (`black #000000`, `dark #141218`, `sepia #F4ECD8`, `light #FEF7FF`; `Theme.kt`'ye `fun comicBgColor(key: String): Color` eklenir — bu görevde Theme.kt'ye dokunan tek görev H6'dır, fonksiyon orada).
+- **C3 (her sayfa çevirmede yerel kayıt + hemen itme):** `ComicReaderViewModel.init`teki `saveRequests.collectLatest` bloğu KALDIRILIR; yerine `pageChanged` içinde `saveChannel.trySend(page)` (`Channel<Int>(CONFLATED)`), tek tüketici `viewModelScope.launch(Dispatchers.IO) { for (p in saveChannel) { core.saveProgress(bookId, p.toString(), (p+1).toDouble()/count, LocalDate.now().toString()); rc.sync.onLocalChange(0) } }`. `savedPage` karşılaştırması (kitabı yalnız açmak yazmaz) KALIR.
+- **C5:** `load`: 4 sn'lik `pullBook`tan sonra `core.positionSuggestion(id)`; öneri varsa `suggestion` dolu ve `loading = true` KALIR (sayfa yüklenmez); `RemotePositionDialog` gösterilir; `AcceptSuggestion` ⇒ `core.acceptPosition(id)`, `DeclineSuggestion` ⇒ `core.declinePosition(id)`; ikisinde de konum `core.getProgress(id).locator.toIntOrNull()` ile yeniden okunup durum tamamlanır. Silme/yer imi sonrası `Scheduler.kickSync(rc)` ⇒ `rc.sync.onLocalChange(2000)`.
+- Ses tuşu/ekran açık/tam ekran: `ReaderWindowEffects(state.prefs, ...)` aynen; `ReaderHint(state.prefs) { rc.prefs.update { it.copy(readerHintSeen = true) } }` `Box` içine eklenir.
+
+### 11.8 Tercihler (`Prefs.kt`, H6)
+
+`UiPrefs`'e eklenen alanlar (varsayılanlarıyla): `val wordSpacing: Float = 0f` (0..0.5, adım 0.05), `val letterSpacing: Float = 0f` (0..0.1, adım 0.01), `val comicBg: String = "black"` (`black|dark|sepia|light`), `val readerHintSeen: Boolean = false`. `normalize` ek satırları: `wordSpacing = (Math.round(p.wordSpacing.coerceIn(0f, 0.5f) / 0.05f) * 0.05f).coerceIn(0f, 0.5f)`, `letterSpacing = (Math.round(p.letterSpacing.coerceIn(0f, 0.1f) / 0.01f) * 0.01f).coerceIn(0f, 0.1f)`, `comicBg = p.comicBg.takeIf { it in COMIC_BGS } ?: "black"` (`COMIC_BGS = setOf("black","dark","sepia","light")`). `update`/`load` anahtarları alan adlarıdır: `putFloat("wordSpacing")`, `putFloat("letterSpacing")`, `putString("comicBg")`, `putBoolean("readerHintSeen")`. Mevcut `TEXT_FONTS` aynı kalır.
+
+### 11.9 `strings.xml` EKLERİ (H6; 6.11 listesine eklenir, hepsi `res/values/strings.xml`)
+```
+sync_state_syncing=Eşitleniyor… | sync_state_synced=Eşitlendi | sync_state_pending=%1$d bekleyen değişiklik
+sync_state_offline=Çevrimdışı | sync_state_error=Eşitleme hatası
+sync_dialog_last=Son eşitleme: %1$s | sync_dialog_never=Henüz eşitlenmedi | sync_dialog_error=Hata: %1$s
+reader_remote_title=Başka bir cihazda okundu | reader_remote_body=Başka bir cihazda okuma konumu: %1$s. Oraya gidilsin mi?
+reader_remote_go=Oraya git | reader_remote_stay=Burada kal
+reader_remote_page=Sayfa %1$d / %2$d | reader_remote_chapter=Bölüm %1$d · %%%2$d
+reader_hint_menu=Menü için ekranın ortasına dokunun | reader_settings_label=Ayarlar
+reader_word_spacing=Kelime arası | reader_letter_spacing=Harf arası
+reader_section_text=Metin | reader_section_page=Sayfa | reader_section_behavior=Davranış | reader_background=Zemin
+comic_settings_title=Çizgi roman ayarları
+stats_title=Okuma istatistikleri | stats_open=Okuma istatistikleri
+stats_streak_current=Güncel seri | stats_streak_longest=En uzun seri | stats_days=%1$d gün
+stats_risk=Seriyi korumak için bugün %1$d dk daha oku | stats_ok=Bugünkü hedef tamam | stats_none=Seri başlatmak için bugün %1$d dk oku
+stats_freeze_ready=Bu haftanın dondurma hakkı duruyor | stats_freeze_used=Bu haftanın dondurma hakkı kullanıldı
+stats_total_time=Toplam süre | stats_total_pages=Toplam sayfa | stats_finished=Tamamlanan kitap
+stats_year=Yıl | stats_legend_less=Az | stats_legend_more=Çok
+stats_legend_qualified=Seriye sayıldı | stats_legend_frozen=Donmuş gün | stats_legend_weak=Eşik altı
+stats_updated=Son güncelleme: %1$s | stats_cached=Çevrimdışı: kayıtlı veri gösteriliyor
+stats_empty=Bu yıl için veri yok | stats_day_none=Okuma yok
+stats_cell_qualified=seriye sayıldı | stats_cell_frozen=seri dondurma günü
+stats_cell_weak=eşiğin altında, seriye sayılmadı | stats_cell_current=güncel seride
+stats_duration_min=%1$d dk | stats_duration_hm=%1$d sa %2$d dk | stats_day_pages=%1$d sayfa
+```
+(`|` yalnız bu listede ayraçtır; `reader_settings` "Okuma ayarları" KALIR, alt sayfa başlığı olarak kullanılmaz: metin okuyucu alt sayfa başlığı `reader_settings`, çizgi roman `comic_settings_title`.)
+
+### 11.10 Çekirdek: istatistik önbelleği (B)
+
+`lib.rs` (H4) — kayıtlar ve modül bildirimi: `mod stats;` (diğer `mod` satırlarının yanına) ve
+```rust
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct StatsDay {
+    pub date: String,
+    pub seconds: i64,
+    pub pages: i64,
+    pub qualified: bool,
+    pub frozen: bool,
+    pub in_current: bool,
+}
+
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct StatsSnapshot {
+    pub total_seconds: i64,
+    pub total_pages: i64,
+    pub finished_count: i64,
+    pub streak_current: i64,
+    pub streak_longest: i64,
+    pub streak_at_risk: bool,
+    pub today_seconds: i64,
+    pub streak_min_seconds: i64,
+    pub freeze_available: bool,
+    pub year: i32,
+    pub years: Vec<i32>,
+    pub days: Vec<StatsDay>,
+    pub fetched_at: i64,     // sunucu saatine göre düzeltilmiş sn; önbellekten geliyorsa önbelleğe yazıldığı an
+    pub from_cache: bool,
+}
+```
+`CORE/src/stats.rs` (H5, YENİ; bağımlılık eklenmez — `serde_json`, `serde` var):
+```rust
+use serde::Deserialize;
+use serde_json::Value;
+
+use crate::{db, error::into_core, http::HErr, Core, CoreError, StatsDay, StatsSnapshot};
+
+#[derive(Deserialize, Default)]
+struct SummaryDto {
+    #[serde(default)] total_seconds: i64,
+    #[serde(default)] total_pages: i64,
+    #[serde(default)] finished_count: i64,
+    #[serde(default)] streak_current: i64,
+    #[serde(default)] streak_longest: i64,
+    #[serde(default)] streak_at_risk: bool,
+    #[serde(default)] today_seconds: i64,
+    #[serde(default = "default_min")] streak_min_seconds: i64,
+    #[serde(default)] freeze_available: bool,
+}
+fn default_min() -> i64 { 300 }
+
+#[derive(Deserialize)]
+struct DayDto {
+    date: String,
+    #[serde(default)] seconds: i64,
+    #[serde(default)] pages: i64,
+    #[serde(default)] qualified: bool,
+    #[serde(default)] frozen: bool,
+    #[serde(default)] in_current: bool,
+}
+
+#[derive(Deserialize)]
+struct HeatDto {
+    #[serde(default)] year: i32,
+    #[serde(default)] years: Vec<i32>,
+    #[serde(default)] days: Vec<DayDto>,
+}
+
+fn snapshot(summary: &Value, heat: &Value, at: i64, cached: bool) -> Result<StatsSnapshot, CoreError> {
+    let s: SummaryDto = serde_json::from_value(summary.clone())
+        .map_err(|_| CoreError::Server("Sunucu yanıtı anlaşılamadı.".to_string()))?;
+    let h: HeatDto = serde_json::from_value(heat.clone())
+        .map_err(|_| CoreError::Server("Sunucu yanıtı anlaşılamadı.".to_string()))?;
+    Ok(StatsSnapshot { /* alan alan kopya; days: h.days.into_iter().map(|d| StatsDay { .. }).collect() */ })
+}
+
+fn read_cached(core: &Core, year: i32) -> Result<Option<StatsSnapshot>, CoreError> {
+    let raw = core.with_db(|c| {
+        Ok((
+            db::kv_get(c, "stats_summary"),
+            db::kv_get(c, &format!("stats_heat_{year}")),
+            db::kv_get(c, "stats_summary_at"),
+        ))
+    })?;
+    let (Some(s), Some(h)) = (raw.0, raw.1) else { return Ok(None) };
+    let at = raw.2.and_then(|v| v.parse().ok()).unwrap_or(0);
+    let (Ok(sv), Ok(hv)) = (serde_json::from_str::<Value>(&s), serde_json::from_str::<Value>(&h)) else { return Ok(None) };
+    snapshot(&sv, &hv, at, true).map(Some)
+}
+
+#[uniffi::export]
+impl Core {
+    /// Ağdan çeker ve önbelleğe yazar; ağ yoksa (Network/TLS) ve önbellek varsa onu döner (`from_cache = true`).
+    /// `today` = `YYYY-MM-DD` (cihazın yerel tarihi); `year` 2000..=2100.
+    pub fn stats_load(&self, year: i32, today: String) -> Result<StatsSnapshot, CoreError> { /* aşağıdaki akış */ }
+
+    /// Yalnız önbellek; ağ yok. Özet veya o yılın ısı haritası önbellekte yoksa None.
+    pub fn stats_cached(&self, year: i32) -> Result<Option<StatsSnapshot>, CoreError> { read_cached(self, year) }
+}
+```
+`stats_load` akışı (kesin): (1) `require_session()`; `year` aralık dışı ya da `today` biçimi `^\d{4}-\d{2}-\d{2}$` değilse `InvalidInput`. (2) `let summary: Value = self.http.get_json(&format!("/api/stats?today={today}"))`; `let heat: Value = self.http.get_json(&format!("/api/stats/heatmap?year={year}&today={today}"))`. (3) İkisi de Ok ⇒ `self.with_db`: `kv_set("stats_summary", &summary.to_string())`, `kv_set("stats_summary_at", &now.to_string())`, `kv_set(&format!("stats_heat_{year}"), &heat.to_string())`; sonra `snapshot(&summary, &heat, now, false)`; `self.persist_offset()`. (4) `Err(HErr::Net(_))` ⇒ `read_cached(self, year)?` `Some` ise o, `None` ise `Err(into_core(e))` (Network/Tls). (5) Diğer `HErr` ⇒ `Err(into_core(e))` (401 ⇒ `Unauthorized`, önbellek KULLANILMAZ). `kv` çıkışta `wipe_all` ile silinir (hesap verisi).
+**Testler** `CORE/tests/stats.rs` (YENİ; `common::*` mock): (1) `stats_load_parses_and_caches`: sahte `/api/stats?today=2026-11-08` (tüm yeni alanlarla) ve `/api/stats/heatmap?year=2026&today=2026-11-08` ⇒ alanlar birebir (`streak_at_risk`, `freeze_available`, `days[i].frozen/in_current`), `from_cache == false`; isteklerde `today` sorgusu ve çerez var. (2) `stats_load_falls_back_to_cache_when_offline`: ilk yükleme sonrası `mock.stop()` ⇒ ikinci `stats_load` ⇒ `from_cache == true`, aynı veri, `fetched_at` ilk değer; önbelleksiz yeni çekirdekte ⇒ `Err(CoreError::Network)`. (3) `stats_cached_is_per_year`: 2026 yüklendi, 2025 için `stats_cached(2025)` ⇒ `None`; 2025 yüklenince ikisi de `Some`. (4) `stats_old_server_without_new_fields`: yeni alanlar yok ⇒ `streak_min_seconds == 300`, `qualified/frozen/in_current == false`, çökme yok. (5) `stats_unauthorized_does_not_use_cache`: 401 ⇒ `Err(Unauthorized)` (önbellek varken bile). (6) `stats_invalid_arguments`: `year = 1999` ve `today = "x"` ⇒ `InvalidInput`. (7) `logout_wipes_stats_cache`.
+
+### 11.11 Mobil: okuma istatistikleri ekranı (B)
+
+Rota: `istatistik` (Kütüphane üst çubuğunda `Icons.Outlined.LocalFireDepartment` simgesi, `contentDescription = stats_open`). `LibraryScreen` imzası YENİ: `LibraryScreen(onOpenSeries, onOpenBook, onOpenSettings, onOpenStats: () -> Unit, onSessionExpired, vm)`. `AppNav.kt`: Kütüphane çağrısına `onOpenStats = { nav.navigate("istatistik") }`; yeni rota `composable("istatistik") { StatsScreen(onBack = { nav.popBackStack() }, onSessionExpired = toLogin) }`.
+
+`KÖK/ui/stats/HeatmapMath.kt` (H6, saf Kotlin, birebir; web `calc.js` ile aynı sonuçlar):
+```kotlin
+package io.github.mustafabayramguven.readcrab.ui.stats
+
+import androidx.compose.ui.graphics.Color
+import java.time.LocalDate
+import kotlin.math.ceil
+
+data class GridCell(val date: String, val col: Int, val row: Int)
+data class YearGrid(val cols: Int, val cells: List<GridCell>, val months: List<Pair<Int, Int>>) // (ay 0..11, ilk sütun)
+data class DayMark(val date: String, val seconds: Long, val pages: Long, val qualified: Boolean, val frozen: Boolean, val inCurrent: Boolean)
+data class Link(val a: Int, val b: Int, val wrap: Boolean, val current: Boolean)
+
+/** Hafta sütunları, satır 0 = Pazartesi (web `yearGrid` ile aynı). */
+fun yearGrid(year: Int): YearGrid {
+    val jan1 = LocalDate.of(year, 1, 1)
+    val offset = jan1.dayOfWeek.value - 1
+    val n = jan1.lengthOfYear()
+    val cells = ArrayList<GridCell>(n)
+    val months = ArrayList<Pair<Int, Int>>()
+    var seen = -1
+    var maxCol = 0
+    for (i in 0 until n) {
+        val d = jan1.plusDays(i.toLong())
+        val col = (i + offset) / 7
+        cells += GridCell(d.toString(), col, (i + offset) % 7)
+        if (d.monthValue - 1 != seen) { seen = d.monthValue - 1; months += seen to col }
+        maxCol = col
+    }
+    return YearGrid(maxCol + 1, cells, months)
+}
+
+fun heatThresholds(values: List<Long>): List<Long> {
+    val s = values.filter { it > 0 }.sorted()
+    if (s.isEmpty()) return listOf(0L, 0L, 0L)
+    return listOf(0.25, 0.5, 0.75).map { s[ceil(it * s.size).toInt() - 1] }
+}
+
+fun heatLevel(v: Long, th: List<Long>): Int = when {
+    v <= 0 -> 0
+    v <= th[0] -> 1
+    v <= th[1] -> 2
+    v <= th[2] -> 3
+    else -> 4
+}
+
+fun chainLinks(cells: List<GridCell>, byDate: Map<String, DayMark>): List<Link> {
+    fun linked(d: DayMark?) = d != null && (d.qualified || d.frozen)
+    val out = ArrayList<Link>()
+    for (i in 0 until cells.size - 1) {
+        val da = byDate[cells[i].date]
+        val db = byDate[cells[i + 1].date]
+        if (linked(da) && linked(db)) {
+            out += Link(i, i + 1, cells[i + 1].col != cells[i].col, da!!.inCurrent && db!!.inCurrent)
+        }
+    }
+    return out
+}
+
+/** Yoğunluk skalası: [seviye0..seviye4]. base = surfaceContainerHigh (AMOLED'de Color.Black), top = primary. */
+fun heatColors(base: Color, top: Color, amoled: Boolean): List<Color> {
+    val t = if (amoled) listOf(0.35f, 0.55f, 0.78f, 1f) else listOf(0.25f, 0.45f, 0.70f, 1f)
+    fun mix(f: Float) = Color(
+        base.red + (top.red - base.red) * f,
+        base.green + (top.green - base.green) * f,
+        base.blue + (top.blue - base.blue) * f,
+    )
+    return listOf(base) + t.map { mix(it) }
+}
+```
+Varsayılan şemalar için KESİN skala (±1 kanal toleransıyla `HeatmapMathTest` doğrular):
+| tema | seviye 0 | 1 | 2 | 3 | 4 |
+|---|---|---|---|---|---|
+| Açık (`primary #6750A4`, taban `#ECE6F0`) | #ECE6F0 | #CBC1DD | #B0A3CE | #8F7DBB | #6750A4 |
+| Koyu (`primary #D0BCFF`, taban `#2B2930`) | #2B2930 | #544E64 | #756B8D | #9F90C1 | #D0BCFF |
+| Saf siyah/AMOLED (taban `#000000`) | #000000 | #494259 | #72678C | #A293C7 | #D0BCFF |
+Saf siyahta seviye 0 hücresi `outlineVariant #3A363E` 1.dp kenarlıkla çizilir (yüzeyden ayrışsın). Dinamik renkte aynı `heatColors` çağrısı `colorScheme.primary` ve (AMOLED değilse) `colorScheme.surfaceContainerHigh` ile yapılır.
+`TESTK/ui/stats/HeatmapMathTest.kt` (JUnit4): `yearGrid(2026).cells[0] == GridCell("2026-01-01", 0, 3)`; `cells.size == 365`, `last().date == "2026-12-31"`; `cols in 53..54`; `months[0] == 0 to 0` ve `months.size == 12`; `yearGrid(2023).cells[0].row == 6`; `yearGrid(2028).cells.size == 366`; `heatThresholds(listOf(10L,9,8,7,6,5,4,3,2,1,0)) == listOf(3L,5L,8L)`; `heatThresholds(emptyList()) == listOf(0L,0L,0L)`; `listOf(0L,-2,1,3,4,5,6,8,9).map { heatLevel(it, listOf(3L,5L,8L)) } == listOf(0,0,1,1,2,2,3,3,4)`; `chainLinks` web testinin birebir Kotlin karşılığı (11-03…11-08 örneği; `current` listesi `[true, true, false]`, `links[2].wrap == false`, 11-09 eklenince 11-08→11-09 `wrap == true`); `heatColors` üç tablo satırı için her kanal farkı ≤ 1/255.
+
+`KÖK/ui/stats/StatsScreen.kt` (H11): `@Composable fun StatsScreen(onBack: () -> Unit, onSessionExpired: () -> Unit, vm: StatsViewModel = viewModel())`.
+```kotlin
+data class StatsState(
+    val year: Int, val snapshot: StatsSnapshot? = null, val loading: Boolean = true,
+    val error: String? = null, val selected: String? = null, val online: Boolean = true,
+)
+sealed interface StatsEvent {
+    data class Year(val y: Int) : StatsEvent
+    data class Select(val date: String?) : StatsEvent   // aynı güne tekrar dokunmak seçimi kaldırır
+    data object Refresh : StatsEvent
+}
+```
+`StatsViewModel(app)`: başlangıç `year = LocalDate.now().year`; `load(year)` (IO): (1) `core.statsCached(year)` varsa hemen `snapshot` yapılır (`loading = false`); (2) çevrimiçiyse `core.statsLoad(year, LocalDate.now().toString())` ⇒ `snapshot`; `CoreException.Unauthorized` ⇒ `needsRelogin = true` ve ekran `onSessionExpired()`; başka `CoreException`: önbellek yoksa `error = e.message`; (3) çevrimdışı ve önbellek yoksa `error = getString(R.string.library_offline)`. `Year` olayında seçim sıfırlanır ve `load(y)`.
+Düzen (üstten alta, `LazyColumn`, yatay dolgu `Dimens.gutter`, öğe aralığı `Dimens.s3`):
+1. **Seri kartı** (`Card`; kapsayıcı rengi `streak_at_risk` ise `errorContainer`/içerik `onErrorContainer`, değilse `surfaceContainerLow`; AMOLED'de `OutlinedCard`, kenarlık `outlineVariant`): satır: `Icons.Outlined.LocalFireDepartment` 32.dp + `stats_days(streakCurrent)` (`headlineMedium`) ; altında `stats_streak_longest` + değer (`labelLarge`); durum satırı (`bodyMedium`, `Modifier.semantics { liveRegion = LiveRegionMode.Polite }`): at_risk ⇒ `stats_risk(N)`; `streakCurrent > 0` ⇒ `stats_ok`; aksi ⇒ `stats_none(N)`; `N = max(1, ceil((min - todaySeconds) / 60.0).toInt())`, `min = streakMinSeconds`; son satır `Icons.Outlined.AcUnit` 16.dp + `stats_freeze_ready` / `stats_freeze_used` (`freezeAvailable`).
+2. **Özet satırı**: üç eşit genişlikli küçük kart: `stats_total_time` (süre biçimi: dk < 60 ⇒ `stats_duration_min`, değilse `stats_duration_hm`), `stats_total_pages`, `stats_finished`.
+3. **Yıl seçici**: `LazyRow` `FilterChip` (`years` ∪ {geçerli yıl}, azalan sıra).
+4. **Isı haritası kartı**: `Card` içinde (a) kaydırılabilir `Canvas`, (b) açıklama (legend).
+5. **Gün ayrıntısı** (seçili gün varsa `Card`): tarih `d MMMM yyyy` (`Locale("tr")`), süre, `stats_day_pages`, durum (`stats_cell_qualified` / `stats_cell_frozen` / `stats_cell_weak` / `stats_day_none`) ve güncel seride ise `stats_cell_current`. Veri yoksa gün için `stats_day_none`.
+6. **Alt bilgi**: `from_cache` ise `stats_cached`; `stats_updated(DateUtils.getRelativeTimeSpanString(fetchedAt * 1000, now, MINUTE_IN_MILLIS))`. Çevrimdışıyken kaydırma ile yenile yoktur; üst çubukta yenile simgesi (`Icons.Outlined.Refresh`, `action_retry`) `Refresh` olayını verir.
+**Canvas ölçüleri (kesin):** `CELL = 14.dp`, `GAP = 3.dp`, `LEFT = 32.dp` (hafta günü etiketleri), `TOP = 18.dp` (ay etiketleri), `STEP = CELL + GAP`; genişlik `LEFT + cols*CELL + (cols-1)*GAP`, yükseklik `TOP + 7*CELL + 6*GAP + GAP`. Kaydırma kabı `Modifier.horizontalScroll(scroll).onSizeChanged { viewportPx = it.width }`; açılışta `LaunchedEffect(snapshot.year, viewportPx)`: `snapshotFlow { scroll.maxValue }.first { it > 0 }` sonra `scroll.scrollTo(target.coerceIn(0, scroll.maxValue))`, `target` = geçerli yıl için `(LEFT + todayCol*STEP + CELL/2 - viewportPx + 3*STEP)` (px; en yeni sütun sağda görünür), geçmiş yıl için `scroll.maxValue`. Çizim sırası: (1) ay etiketleri (`rememberTextMeasurer`, `labelSmall`, `onSurfaceVariant`; metinler `Oca Şub Mar Nis May Haz Tem Ağu Eyl Eki Kas Ara`) ve hafta günü etiketleri satır 0/2/4 için `Pzt Çar Cum`; (2) zincir bağlantıları: `non-wrap` ⇒ iki hücre arasındaki boşluğa, hücre ortasında 4.dp genişlikte `GAP` yüksekliğinde dikdörtgen; `wrap` ⇒ Pazar hücresinin altına ve sonraki sütunun Pazartesi hücresinin üstüne aynı boyda birer çıkıntı; renk `current` ise `primary`, değilse `onSurfaceVariant` %35; (3) hücreler (`CELL` kare, köşe 3.dp):
+ - dolgu `heatColors(...)[heatLevel(seconds, thresholds)]`, eşik altı gün (`seconds > 0 && !qualified && !frozen`) %50 saydam;
+ - donmuş gün: dolgu `surfaceContainerHigh` (AMOLED'de siyah), hücre içine kırpılmış 45° çizgi deseni (`clipPath`, çizgi aralığı 5.dp, kalınlık 1.5.dp, renk `tertiary`) ve 1.dp `tertiary` kenarlık;
+ - `inCurrent` ise 1.5.dp `primary` kenarlık;
+ - saf siyahta seviye 0 hücre 1.dp `outlineVariant` kenarlık.
+ Dokunma: `pointerInput { detectTapGestures { p -> ... } }` ile `(col, row) = ((p.x - LEFT)/STEP, (p.y - TOP)/STEP)` ⇒ hücre ⇒ `Select(date)`. Erişilebilirlik: `Canvas` `semantics { contentDescription = "Okuma takvimi {yıl}, {okunan gün sayısı} gün" }`; seçili gün kartı durumu METİNLE de söyler; durum yalnız renkle verilmez (desen + kenarlık + bağlantı + metin).
+**Açıklama (legend)**: `FlowRow`: `stats_legend_less` + 5 küçük kare + `stats_legend_more`; üç ek öğe: kenarlıklı kare = `stats_legend_qualified`, desenli kare = `stats_legend_frozen`, %50 saydam kare = `stats_legend_weak`.
+
+### 11.12 Ek davranış notları (kapalı kararlar)
+- Çubuklar her iki okuyucuda varsayılan KAPALI; açılışta ipucu (bir kez). Orta dokunma açar/kapatır; metin sayfa modunda orta üçte bir `tap` gönderir (kenar üçtebirleri sayfa çevirir; `tapZones` kapalıysa her dokunuş `tap` olur, çevirme yalnız kaydırma/ses tuşu).
+- "Otomatik" okuyucu teması kalır (web'de seçim yokken uygulama modunu izleme davranışı).
+- Çizgi roman webtoon'da yakınlaştırma yoktur (değişmedi). Yer imi çift gönderim sorunu kapsam dışı.
+- `ReaderWindowEffects` değişmez (immersive/uyanık/ses tuşu); WebView artık `safeDrawing` ile pay aldığı için immersive iken de kesik/köşe güvenlidir.
+- Bölüm 5.3'teki `merge_progress` tablosu aynen geçerlidir; yalnız `TakeServer` uygulaması 11.4 kuralıyla önerilebilir.
+
+### 11.13 Görev listesi (iterasyon 2)
+
+Aynı satırdaki dosyalar o görevin tekelindedir; iki işçi aynı dosyaya dokunmaz. Sıra gerektiren tek paylaşılan dosya: `ui/nav/AppNav.kt` (önce H8, sonra H11) ve `work/Workers.kt` (H7 sonra H12). İşçiler git çalıştırmaz.
+| # | İşçi | Görev | Dosyalar | Bağımlılık |
+|---|---|---|---|---|
+| H1 | İŞÇİ-1 | Sunucu seri kuralı + testler (11.1) | `src/api/stats.rs`, `tests/tracking.rs`, `tests/iter2.rs` | — |
+| H2 | İŞÇİ-2 | Web saf fonksiyonlar + node testi (11.2) | `web/calc.js`, `web/calc.test.mjs` | — |
+| H3 | İŞÇİ-2 | Web ısı haritası zinciri + seri kartı (11.2) | `web/stats.js`, `web/style.css` | H1, H2 |
+| H4 | İŞÇİ-1 | Çekirdek: öneri, şema 0002, itme durumu, kayıt türleri, `mod stats;` (11.4, 11.10 türleri) | `CORE/src/migrations/0002_remote_pos.sql`, `CORE/src/db.rs`, `CORE/src/sync.rs`, `CORE/src/lib.rs`, `CORE/tests/sync.rs` | — |
+| H5 | İŞÇİ-1 | Çekirdek: istatistik modülü + testleri (11.10) | `CORE/src/stats.rs`, `CORE/tests/stats.rs` | H4 |
+| H6 | İŞÇİ-2 | Tercihler, dizgiler, `comicBgColor`, `Locator`, `HeatmapMath` + 2 birim test dosyası (11.3, 11.8, 11.9, 11.11) | `KÖK/Prefs.kt`, `android/app/src/main/res/values/strings.xml`, `KÖK/ui/theme/Theme.kt`, `KÖK/ui/reader/text/Locator.kt`, `KÖK/ui/stats/HeatmapMath.kt`, `TESTK/ui/reader/text/LocatorTest.kt`, `TESTK/ui/stats/HeatmapMathTest.kt` | — |
+| H7 | İŞÇİ-1 | `SyncCoordinator`, `RcApp`, `Workers` (kickSync kılıfı), `MainActivity` (11.5) | `KÖK/sync/SyncCoordinator.kt`, `KÖK/RcApp.kt`, `KÖK/work/Workers.kt`, `KÖK/MainActivity.kt` | — |
+| H8 | İŞÇİ-2 | Eşitleme göstergesi + ekranların koordinatöre geçişi + Kütüphane istatistik simgesi (11.5, 11.11) | `KÖK/ui/common/SyncIndicator.kt`, `KÖK/ui/library/LibraryScreen.kt`, `KÖK/ui/series/SeriesScreen.kt`, `KÖK/ui/login/LoginScreen.kt`, `KÖK/ui/settings/SettingsScreen.kt`, `KÖK/ui/nav/AppNav.kt` | H6, H7 |
+| H9 | İŞÇİ-1 | Okuyucu ortak bileşenler + çizgi roman (11.7) | `KÖK/ui/reader/ReaderCommon.kt`, `KÖK/ui/reader/comic/ComicReaderScreen.kt` | H4, H6, H7, H8 |
+| H10 | İŞÇİ-1 | Metin okuyucu yeniden yazımı (11.6) | `android/app/src/main/assets/reader.html`, `reader.css`, `reader.js`, `KÖK/ui/reader/text/ReaderWebView.kt`, `KÖK/ui/reader/text/TextReaderScreen.kt` | H9 |
+| H11 | İŞÇİ-2 | İstatistik ekranı + rota (11.11) | `KÖK/ui/stats/StatsScreen.kt`, `KÖK/ui/nav/AppNav.kt` (H8'den sonra) | H5, H6, H8 |
+| H12 | İŞÇİ-2 | Eski eşitleme kalıntılarını sil: `Scheduler.kickSync`, `schedulePeriodicSync`, `SyncWorker`; depoda `kickSync`/`schedulePeriodicSync`/`SyncWorker` araması boş olmalı | `KÖK/work/Workers.kt` | H9, H10, H11 |
+Dalga planı: 1) H1, H2, H4, H6, H7 eşzamanlı → 2) H3 (H1,H2), H5 (H4), H8 (H6,H7) → 3) H9 (H4,H6,H7,H8), H11 (H5,H6,H8) → 4) H10 (H9) → 5) H12. Sayım: İŞÇİ-1 = 6 (H1, H4, H5, H7, H9, H10); İŞÇİ-2 = 6 (H2, H3, H6, H8, H11, H12).
+
+#### Commit grupları (commit'leri CEO atar; her mesaj `Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>` ile biter; sıra aşağıdaki gibi, her biri tek başına derlenir)
+| Grup | Görevler | Mesaj |
+|---|---|---|
+| M1 | H1 | `Sunucu: seri kuralı 300 sn eşik, haftalık dondurma hakkı ve ısı haritası gün durumları` |
+| M2 | H2, H3 | `Web: ısı haritasında zincir görünümü ve seri kartında bugün uyarısı` |
+| M3 | H4 | `Çekirdek: başka cihaz konumu önerisi ve itme sonrası eşitleme durumu` |
+| M4 | H5 | `Çekirdek: istatistik önbelleği (stats_load, stats_cached)` |
+| M5 | H6 | `Android: tercihler, dizgiler, konum ve ısı haritası yardımcıları (birim testli)` |
+| M6 | H7, H8 | `Android: yalnız ön plan eşitleme ve görünür eşitleme göstergesi` |
+| M7 | H9 | `Android: okuyucu ayar alt sayfası, ilk açılış ipucu, çizgi roman ayarları ve anlık eşitleme` |
+| M8 | H10 | `Android: metin okuyucu sayfa modu yeniden yazıldı, paragraf konumu ve web uyumlu ayarlar` |
+| M9 | H11 | `Android: okuma istatistikleri ve ısı haritası ekranı` |
+| M10 | H12 | `Android: eski arka plan eşitleme kalıntıları silindi` |
+(`lock.yml` tetiklenmez: hiçbir `Cargo.toml` değişmez.)
+
+### 11.14 Kabul testleri (özet) ve CI
+- Sunucu: `cargo test --locked` — `stats.rs` içi tablo testi (14 satır + `current_days` doğrulamaları), `stats_streaks_and_daily` (güncel), `stats_threshold_boundary`, `heatmap_marks_qualified_frozen_in_current`, `heatmap_frozen_day_crosses_year`; mevcut `heatmap_isolated_per_user` değişmeden geçer.
+- Web: `node web/calc.test.mjs` (chainLinks, streakMessage), `node --check web/*.js`.
+- Çekirdek: `cargo test -p readcrab_core` — `suggest_instead` tablosu, güncellenen/yeni `tests/sync.rs` testleri (11.4), `tests/stats.rs` (11.10), şema göçü (`user_version == 2`).
+- Kotlin birim: `LocatorTest`, `HeatmapMathTest`, `ThemeTest` (`gradle testDebugUnitTest`).
+- Derleme: `android.yml` `apk` işi (değişmez).
+
+### 11.15 Elle doğrulama listesi (cihazda; CEO kullanıcıya verir)
+1. **Metin sayfa modu:** Ayarlar > mod "Sayfa". Her sayfa ekran genişliğinde tek sütun; metin durum çubuğu/kesik/köşelerin altına girmiyor; sayfa numarası altta; kenar boşluğu kaydırıcısı anında etki ediyor; satırlar yarıda kesilmiyor.
+2. Sağa/sola kaydırma ve kenar dokunmaları tam sayfa kaydırıyor (ara konumda kalmıyor); ekran kenarından kaydırmak geri hareketini tetiklemiyor; ses tuşları sayfa çeviriyor.
+3. Yazı boyutu/yazı tipi/satır aralığı/kenar boşluğu değişince ve ekran döndürülünce aynı paragraf görünür kalıyor; son sayfada sonraki bölüme ya da sonraki cilt kartına geçiliyor.
+4. **Menü/ayar:** Bir çizgi roman ve bir EPUB aç: çubuklar kapalı, 5 sn "Menü için ekranın ortasına dokunun" ipucu (yalnız ilk kez); ekran ortasına dokununca üst ve alt çubuk açılıyor; alt çubukta "Ayarlar" düğmesi görünür ve alt sayfayı açıyor.
+5. Metin ayar sayfası sırası: Tema, Yazı tipi (7), Metin (boyut, satır aralığı, kelime arası, harf arası, kenar boşluğu), Sayfa (hizalama, mod), Davranış; her değişiklik anında okuyucuya yansıyor.
+6. Çizgi roman ayar sayfası: okuma yönü (3), zemin (4), dokunma bölgeleri, ses tuşları, ekran açık, tam ekran; yön değişince sayfa korunuyor.
+7. **Konum uyumu:** Metin kaydırma modunda oku → web arayüzünde aynı kitap açıldığında aynı yere yakın; webde ilerle → telefonda "Şimdi eşitle" sonrası kitabı aç: "Başka bir cihazda okuma konumu: … Oraya gidilsin mi?" sorusu; "Oraya git" konuma götürür; "Burada kal" konumu korur ve aynı sunucu konumu için bir daha sormaz; yereli hiç olmayan kitapta sormadan sunucu konumu açılır.
+8. **Eşitleme:** Kütüphane ve okuyucu üst çubuğunda gösterge: çevrimiçi ve bekleyen yokken "Eşitlendi"; uçak modunda sayfa çevir → "Çevrimdışı" (dokununca bekleyen sayısı); bağlantı gelince (uygulama açıkken) otomatik "Eşitlendi"; dokununca son eşitleme zamanı ve "Şimdi eşitle". Uygulama kapalıyken (arka planda) sunucuya hiçbir istek gitmiyor (sunucu günlüğünden doğrula).
+9. Metin sayfa modunda ve çizgi romanda HER sayfa çevirişi sunucu ilerlemesini hemen güncelliyor (web'de kitap sayfasını yenileyerek doğrula); metin kaydırma modunda paragraf değişince ~2 sn sonra gidiyor; okuyucudan çıkışta hemen gidiyor.
+10. **İstatistik:** Kütüphane > alev simgesi: yıllık takvim yatay kaydırılıyor, açılışta bugün sağda görünüyor; nitelikli günler (≥ 5 dk) birbirine bağlı, güncel seri vurgulu, donmuş gün çizgili desenli, eşik altı gün soluk; güne dokununca süre/sayfa/durum yazıyor; seri kartı güncel ve en uzun seriyi, bugün uyarısını ("Seriyi korumak için bugün N dk daha oku") ve dondurma hakkını gösteriyor; uçak modunda son çekilen veri "Çevrimdışı: kayıtlı veri gösteriliyor" ve "Son güncelleme" ile açılıyor; saf siyahta zemin #000000, hücreler okunuyor.
+11. **Web:** İstatistik sayfasında seri kartı ve uyarı rengi; Geçmiş sayfasında ısı haritasında zincir bağlantıları, donmuş ve eşik altı günler; açık, koyu ve saf siyah temalarda okunuyor; ekran okuyucu etiketleri durumu söylüyor.
+12. Seri kuralı: bir gün 4 dk (299 sn altı) okuyunca seri artmıyor, 5 dk okuyunca artıyor; bir gün boş bırakıp ertesi gün okuyunca (o haftanın hakkı varsa) seri bozulmuyor, aynı hafta ikinci boş gün seriyi koparıyor; iki ardışık boş gün seriyi koparıyor.
+
+### 11.16 Kök nedenler (özet, dosya:satır)
+- **D (sayfa modu):** `TextReaderScreen.kt:541` (immersive iken WebView'a hiç inset yok; `systemBars` zaten ekran kesiğini içermez; `reader.html:5` `viewport-fit=cover`) · `reader.js:38` (yan boşluk tabanı 16 px) + `frame.css:11,55` / `reader.js:12` (`BAR_V = 176` sabit dikey rezerv) · `frame.css:33-38` + `reader.js:71-79` (sayfa modunda yerel yatay kaydırma + 120 ms gecikmeli yapışma: ara konum ve zıplama; geri hareketi kenarı) · `reader.js:50` (konum her `relayout`ta ORANDAN yeniden türetilir: toplam sayfa değişince sayfa kayar).
+- **E (ayarlar):** `ComicReaderScreen.kt:520-577` (`ComicTopBar`: tek yol ⋮ menüsü, yalnız yön öğeleri; "Ayarlar" yok; dokunma bölgeleri/ses/uyanık/zemin okuyucudan erişilemez; zemin sabit `Color.Black`) · `TextReaderScreen.kt:641` (ayar yalnız etiketsiz küçük dişli; orta dokunmayla çubuk kapanıp geri açılışı bilinmiyor, ipucu yok) · `TextReaderScreen.kt:770` (`SettingsSheet` kelime/harf aralığı yok). JS→VM `tap` köprüsü kodla doğrulandı, bozuk değil.
+
+### 11.17 Sunucu API değişikliklerinin tam alan listesi
+- `GET /api/stats` (mevcut alanlar aynen; `streak_current`/`streak_longest` yeni kurala göre) — EKLENEN: `streak_at_risk: bool`, `today_seconds: i64`, `streak_min_seconds: i64` (= 300), `freeze_available: bool`.
+- `GET /api/stats/heatmap?year=YYYY[&today=YYYY-MM-DD]` — yeni isteğe bağlı sorgu `today` (geçersizse 400). Yanıt: `year`, `years`, EKLENEN `streak_min_seconds: i64`; `days[]` elemanı `{date, seconds, pages}` + EKLENEN `qualified: bool`, `frozen: bool`, `in_current: bool`. Verisi olmayan donmuş günler `seconds:0, pages:0` ile listede yer alır. `today` yoksa `in_current` hep false.
+- Başka endpoint değişmez; `daily[]` (`/api/stats`) değişmez.
+
 ## CEO'YA SORULAR: yok
