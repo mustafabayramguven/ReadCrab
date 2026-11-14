@@ -25,6 +25,8 @@
   function clamp01(v) { v = Number(v); return !isFinite(v) ? 0 : v < 0 ? 0 : v > 1 ? 1 : v; }
   function se() { return document.scrollingElement || root; }
   function paged() { return P.mode === 'page'; }
+  // sayfa modunda kaydıran body: kök taşarsa mobil WebView sayfayı uzaklaştırıp metni kaybeder
+  function pager() { return document.body; }
 
   function collectBlocks() {
     var all = Array.prototype.slice.call(document.body.querySelectorAll(BLOCK_SEL));
@@ -37,7 +39,7 @@
   function pageOfBlock(i) {
     var el = blocks[i], r = el && firstRect(el);
     if (!r) return 0;
-    return Math.max(0, Math.min(pageTotal - 1, Math.floor((r.left + se().scrollLeft + 1) / window.innerWidth)));
+    return Math.max(0, Math.min(pageTotal - 1, Math.floor((r.left + pager().scrollLeft + 1) / window.innerWidth)));
   }
   function scrollTopOf(i) {
     var el = blocks[i];
@@ -45,7 +47,7 @@
     return Math.max(0, Math.round(el.getBoundingClientRect().top + se().scrollTop - 8));
   }
   function blockAtPage(i) {          // sayfada başlayan ilk blok; yoksa sayfayı kaplayan blok
-    var pw = window.innerWidth, lo = i * pw, hi = lo + pw, sl = se().scrollLeft, cover = -1;
+    var pw = window.innerWidth, lo = i * pw, hi = lo + pw, sl = pager().scrollLeft, cover = -1;
     for (var k = 0; k < blocks.length; k++) {
       var rs = blocks[k].getClientRects();
       if (!rs.length) continue;
@@ -97,10 +99,10 @@
     if (paged()) {
       var range = document.createRange();
       range.selectNodeContents(document.body);
-      var right = range.getBoundingClientRect().right + e.scrollLeft;
+      var right = range.getBoundingClientRect().right + pager().scrollLeft;
       pageTotal = Math.max(1, Math.ceil((right - 1) / pw));
       pageIdx = anchor >= 0 ? pageOfBlock(anchor) : (pageTotal <= 1 ? 0 : Math.round(ratio * (pageTotal - 1)));
-      window.scrollTo(pageIdx * pw, 0);
+      pager().scrollLeft = pageIdx * pw;
       ratio = pageTotal <= 1 ? 0 : pageIdx / (pageTotal - 1);
       if (pageTotal <= 1) { ratio = 1; promoted = true; }  // tek sayfalık bölüm
     } else {
@@ -152,7 +154,7 @@
     if (i < 0) { post({ t: 'edge', d: -1 }); return; }
     pageIdx = i;
     ratio = pageTotal <= 1 ? 0 : i / (pageTotal - 1);
-    window.scrollTo(i * window.innerWidth, 0);
+    pager().scrollLeft = i * window.innerWidth;
     anchor = blockAtPage(i);
     report(true);
   }
