@@ -2,6 +2,7 @@ FROM rust:1.89-bookworm AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY src ./src
+COPY crates ./crates
 COPY web ./web
 RUN cargo build --release --locked
 

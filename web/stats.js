@@ -255,6 +255,22 @@
     return n;
   }
 
+  // Donmuş gün deseni (çizgili). id: aynı belgede tekil olmalı.
+  function frozenDefs(id) {
+    var defs = svgEl('defs', {});
+    var p = svgEl('pattern', {
+      id: id,
+      width: 4,
+      height: 4,
+      patternUnits: 'userSpaceOnUse',
+      patternTransform: 'rotate(45)'
+    });
+    p.appendChild(svgEl('rect', { class: 'hm-frozen-bg', width: 4, height: 4 }));
+    p.appendChild(svgEl('rect', { class: 'hm-frozen-stripe', width: 2, height: 4 }));
+    defs.appendChild(p);
+    return defs;
+  }
+
   function minutes(sec) {
     return sec > 0 ? Math.max(1, Math.round(sec / 60)) : 0;
   }
@@ -278,7 +294,7 @@
       tabindex: '0'
     });
     var body = el('div', { className: 'heatmap-body' });
-    var legend = el('div', { className: 'hm-legend type-label-small', 'aria-hidden': 'true' });
+    var legend = el('div', { className: 'hm-legend type-label-small' });
     var legendSvg = svgEl('svg', {
       width: 5 * (CELL + GAP) - GAP,
       height: CELL,
@@ -299,6 +315,25 @@
     legend.appendChild(el('span', { text: 'Az' }));
     legend.appendChild(legendSvg);
     legend.appendChild(el('span', { text: 'Çok' }));
+    // Durum öğeleri: yalnız renkle değil, kenarlık/desen/soluklukla da ayrışır
+    function legendItem(label, shape) {
+      var sw = svgEl('svg', { width: CELL, height: CELL, viewBox: '0 0 ' + CELL + ' ' + CELL });
+      if (shape === 'frozen') sw.appendChild(frozenDefs('hm-frozen-pat-lg'));
+      var r = svgEl('rect', {
+        class: shape === 'qualified' ? 'hm-cell hm-3 hm-cur' : shape === 'frozen' ? 'hm-cell hm-frozen' : 'hm-cell hm-1 hm-weak',
+        x: 0,
+        y: 0,
+        width: CELL,
+        height: CELL,
+        rx: 2
+      });
+      if (shape === 'frozen') r.setAttribute('fill', 'url(#hm-frozen-pat-lg)');
+      sw.appendChild(r);
+      return el('span', { className: 'lg' }, [sw, el('span', { text: label })]);
+    }
+    legend.appendChild(legendItem('Seriye sayıldı', 'qualified'));
+    legend.appendChild(legendItem('Donmuş gün', 'frozen'));
+    legend.appendChild(legendItem('Eşik altı', 'weak'));
 
     heatMount.appendChild(
       el('div', { className: 'heatmap-head' }, [
@@ -375,6 +410,7 @@
         height: height,
         viewBox: '0 0 ' + width + ' ' + height
       });
+      svg.appendChild(frozenDefs('hm-frozen-pat'));
       grid.months.forEach(function (m) {
         var t = svgEl('text', { class: 'axis-label', x: LEFT + m.col * step, y: 12 });
         t.textContent = m.label;
@@ -397,10 +433,16 @@
         var d = byDate[c.date];
         var sec = d ? Number(d.seconds) || 0 : 0;
         var level = calc.heatLevel(sec, th);
+        var isQ = !!(d && d.qualified), isFz = !!(d && d.frozen), inCur = !!(d && d.in_current);
+        var isWeak = !!(d && !d.qualified && !d.frozen && sec > 0);
+        var suffix = (isQ ? ', seriye sayıldı' : isFz ? ', seri dondurma günü' : isWeak ? ', eşiğin altında, seriye sayılmadı' : '') +
+          (inCur ? ', güncel seride' : '');
         var label = formatHistoryDate(c.date) + ': ' +
-          (sec > 0 ? formatDuration(sec) + ', ' + (d.pages || 0) + ' sayfa' : 'okuma yok');
-        var rect = svgEl('rect', {
-          class: 'hm-cell hm-' + level,
+          (sec > 0 ? formatDuration(sec) + ', ' + (d.pages || 0) + ' sayfa' : 'okuma yok') + suffix;
+        var cellAttrs = {
+          // donmuş gün: dolgu desen (CSS hm-N dolgusu deseni ezmesin diye seviye sınıfı yok)
+          class: 'hm-cell' + (isFz ? ' hm-frozen' : ' hm-' + level) + (isQ || isFz ? ' hm-link' : '') +
+            (inCur ? ' hm-cur' : '') + (isWeak ? ' hm-weak' : ''),
           x: LEFT + c.col * step,
           y: TOP + c.row * step,
           width: cs,
@@ -410,7 +452,9 @@
           tabindex: '-1',
           'aria-label': label,
           'data-date': c.date
-        });
+        };
+        if (isFz) cellAttrs.fill = 'url(#hm-frozen-pat)';
+        var rect = svgEl('rect', cellAttrs);
         var title = svgEl('title', {});
         title.textContent = label;
         rect.appendChild(title);
@@ -426,6 +470,21 @@
         cells.push(rect);
         svg.appendChild(rect);
       });
+
+      // Zincir bağlantıları: hücrelerin ALTINA çizilir (önce eklenir)
+      var linkG = svgEl('g', {});
+      calc.chainLinks(grid.cells, byDate).forEach(function (l) {
+        var ca = grid.cells[l.a], cb = grid.cells[l.b];
+        var barCls = 'hm-link-bar' + (l.current ? ' hm-link-cur' : '');
+        if (!l.wrap) {
+          linkG.appendChild(svgEl('rect', { class: barCls, x: LEFT + ca.col * step, y: TOP + ca.row * step + cs, width: cs, height: GAP }));
+        } else {
+          // Pazar -> sonraki Pazartesi: Pazar altında ve sonraki sütunun üstünde çıkıntı
+          linkG.appendChild(svgEl('rect', { class: barCls, x: LEFT + ca.col * step, y: TOP + 6 * step + cs, width: cs, height: GAP }));
+          linkG.appendChild(svgEl('rect', { class: barCls, x: LEFT + cb.col * step, y: TOP - GAP, width: cs, height: GAP }));
+        }
+      });
+      svg.insertBefore(linkG, svg.firstChild);
 
       var cur = focusIdx;
       cells[cur].setAttribute('tabindex', '0');
@@ -542,7 +601,7 @@
       clearNode(body);
       for (var k = 0; k < 2; k++) body.appendChild(el('div', { className: 'skeleton skeleton-row' }));
       try {
-        var data = await KRS.api('GET', '/api/stats/heatmap?year=' + year);
+        var data = await KRS.api('GET', '/api/stats/heatmap?year=' + year + '&today=' + encodeURIComponent(KRS.todayLocal()));
         if (mine !== seq || (gen !== undefined && gen !== KRS.routeGen)) return;
         fillYears(data.years);
         drawHeatmap(data, true);
@@ -835,18 +894,23 @@
           icon: 'check_circle',
           value: String(data.finished_count || 0),
           label: 'Tamamlanan kitap'
-        },
-        {
-          icon: 'local_fire_department',
-          value: (data.streak_current || 0) + ' gün',
-          label: 'Güncel seri'
-        },
-        {
-          icon: 'local_fire_department',
-          value: (data.streak_longest || 0) + ' gün',
-          label: 'En uzun seri'
         }
       ];
+
+      // Seri kartı: güncel seri, en uzun seri, bugün uyarısı ve dondurma hakkı
+      var sm = window.KRS_CALC.streakMessage(data);
+      mount.appendChild(
+        el('section', { className: 'streak-card' + (sm.kind === 'risk' ? ' risk' : '') }, [
+          el('div', { className: 'streak-head' }, [
+            icon('local_fire_department'),
+            el('p', { className: 'streak-num', text: (data.streak_current || 0) + ' gün' })
+          ]),
+          el('p', { className: 'streak-sub', text: 'En uzun seri: ' + (data.streak_longest || 0) + ' gün' }),
+          el('p', { className: 'streak-msg', role: 'status' },
+            sm.kind === 'risk' ? [icon('warning'), el('span', { text: sm.text })] : [el('span', { text: sm.text })]),
+          el('p', { className: 'streak-freeze', text: sm.freezeText })
+        ])
+      );
 
       var statGrid = el('div', { className: 'stat-grid' });
       for (var i = 0; i < statItems.length; i++) {
