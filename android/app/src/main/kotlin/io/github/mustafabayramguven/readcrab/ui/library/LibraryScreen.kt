@@ -1,14 +1,17 @@
 package io.github.mustafabayramguven.readcrab.ui.library
 
 import android.app.Application
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -16,8 +19,9 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.LocalFireDepartment
@@ -30,12 +34,12 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -45,6 +49,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -58,12 +64,12 @@ import io.github.mustafabayramguven.readcrab.RcApp
 import io.github.mustafabayramguven.readcrab.core.ContinueItem
 import io.github.mustafabayramguven.readcrab.core.CoreException
 import io.github.mustafabayramguven.readcrab.core.SeriesItem
+import io.github.mustafabayramguven.readcrab.sync.SyncKind
 import io.github.mustafabayramguven.readcrab.ui.common.CoverImage
 import io.github.mustafabayramguven.readcrab.ui.common.EmptyState
 import io.github.mustafabayramguven.readcrab.ui.common.OfflineBanner
 import io.github.mustafabayramguven.readcrab.ui.common.SyncIndicatorButton
 import io.github.mustafabayramguven.readcrab.ui.theme.Dimens
-import io.github.mustafabayramguven.readcrab.sync.SyncKind
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -161,29 +167,41 @@ fun LibraryScreen(
             TopAppBar(
                 title = {
                     if (searching) {
+                        val focus = remember { FocusRequester() }
+                        LaunchedEffect(Unit) { focus.requestFocus() }
                         OutlinedTextField(
                             value = state.query,
                             onValueChange = { vm.onEvent(LibraryEvent.Query(it)) },
                             placeholder = { Text(stringResource(R.string.library_search_hint)) },
                             singleLine = true,
+                            modifier = Modifier.fillMaxWidth().focusRequester(focus),
                         )
                     } else {
                         Text(stringResource(R.string.library_title))
                     }
                 },
                 actions = {
-                    IconButton(onClick = onOpenStats) {
-                        Icon(Icons.Outlined.LocalFireDepartment, contentDescription = stringResource(R.string.stats_open))
+                    // aramada yalnız kapat düğmesi kalır; dört ikon arama alanını sıkıştırıyordu
+                    if (!searching) {
+                        IconButton(onClick = onOpenStats) {
+                            Icon(Icons.Outlined.LocalFireDepartment, contentDescription = stringResource(R.string.stats_open))
+                        }
+                        SyncIndicatorButton()
                     }
-                    SyncIndicatorButton()
                     IconButton(onClick = {
                         if (searching) vm.onEvent(LibraryEvent.Query(""))
                         searching = !searching
                     }) {
-                        Icon(Icons.Filled.Search, contentDescription = stringResource(R.string.action_search))
+                        if (searching) {
+                            Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.action_close))
+                        } else {
+                            Icon(Icons.Filled.Search, contentDescription = stringResource(R.string.action_search))
+                        }
                     }
-                    IconButton(onClick = onOpenSettings) {
-                        Icon(Icons.Outlined.Settings, contentDescription = stringResource(R.string.action_settings))
+                    if (!searching) {
+                        IconButton(onClick = onOpenSettings) {
+                            Icon(Icons.Outlined.Settings, contentDescription = stringResource(R.string.action_settings))
+                        }
                     }
                 },
             )
@@ -271,11 +289,18 @@ private fun SeriesCard(s: SeriesItem, onClick: () -> Unit) {
     Column(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Box {
             CoverImage(s.coverBookId, s.coverV, Modifier.fillMaxWidth())
-            if (s.downloadedCount == s.bookCount) {
+            if (s.bookCount > 0 && s.downloadedCount == s.bookCount) {
+                // zeminsiz ikon kapak üstünde kayboluyordu
                 Icon(
                     Icons.Filled.DownloadDone,
-                    contentDescription = null,
-                    modifier = Modifier.align(Alignment.TopEnd).padding(Dimens.s1),
+                    contentDescription = stringResource(R.string.download_done),
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(Dimens.s1)
+                        .background(MaterialTheme.colorScheme.primaryContainer, CircleShape)
+                        .padding(2.dp)
+                        .size(18.dp),
                 )
             }
         }

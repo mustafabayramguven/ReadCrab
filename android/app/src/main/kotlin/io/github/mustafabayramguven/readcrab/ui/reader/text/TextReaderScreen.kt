@@ -20,7 +20,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -682,7 +683,7 @@ fun TextReaderScreen(
 private fun TextTopBar(state: TextState, vm: TextReaderViewModel, onBack: (Long) -> Unit) {
     Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f), modifier = Modifier.fillMaxWidth()) {
         Row(
-            Modifier.statusBarsPadding().height(Dimens.barHeight),
+            Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)).height(Dimens.barHeight),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onClick = { onBack(state.seriesId) }) {
@@ -717,7 +718,7 @@ private fun TextTopBar(state: TextState, vm: TextReaderViewModel, onBack: (Long)
 @Composable
 private fun TextBottomBar(state: TextState, vm: TextReaderViewModel) {
     Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f), modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.navigationBarsPadding().padding(horizontal = Dimens.gutter, vertical = Dimens.s2)) {
+        Column(Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal)).padding(horizontal = Dimens.gutter, vertical = Dimens.s2)) {
             LinearProgressIndicator(
                 progress = { state.percent.toFloat().coerceIn(0f, 1f) },
                 modifier = Modifier.fillMaxWidth(),

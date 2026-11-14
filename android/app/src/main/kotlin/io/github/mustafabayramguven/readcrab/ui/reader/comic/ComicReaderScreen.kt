@@ -19,7 +19,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -449,7 +453,7 @@ private fun ComicBody(
                 Modifier
                     .align(Alignment.BottomCenter)
                     .navigationBarsPadding()
-                    .padding(start = Dimens.gutter, end = Dimens.gutter, bottom = if (state.barsVisible) 96.dp else Dimens.s5),
+                    .padding(start = Dimens.gutter, end = Dimens.gutter, bottom = if (state.barsVisible) 144.dp else Dimens.s5),
             ) {
                 Row(
                     Modifier.padding(Dimens.s3),
@@ -655,7 +659,7 @@ private fun ComicTopBar(state: ComicState, vm: ComicReaderViewModel, onBack: (Lo
     val bookmarked = state.bookmarks.any { it.locator == state.page.toString() }
     Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f), modifier = Modifier.fillMaxWidth()) {
         Row(
-            Modifier.statusBarsPadding().height(Dimens.barHeight),
+            Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)).height(Dimens.barHeight),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onClick = { onBack(state.seriesId) }) {
@@ -691,7 +695,7 @@ private fun ComicBottomBar(state: ComicState, vm: ComicReaderViewModel) {
     val shown = drag ?: state.page.toFloat()
     Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f), modifier = Modifier.fillMaxWidth()) {
         Column(
-            Modifier.navigationBarsPadding().padding(horizontal = Dimens.gutter, vertical = Dimens.s2),
+            Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal)).padding(horizontal = Dimens.gutter, vertical = Dimens.s2),
         ) {
             Text(
                 stringResource(R.string.reader_page_of, shown.roundToInt() + 1, count),
@@ -706,7 +710,7 @@ private fun ComicBottomBar(state: ComicState, vm: ComicReaderViewModel) {
                         value = shown,
                         onValueChange = { drag = it },
                         valueRange = 0f..(count - 1).toFloat(),
-                        steps = (count - 2).coerceAtLeast(0),
+                        steps = 0, // her sayfa için tik noktası izi doldurur; değer bırakınca yuvarlanır
                         onValueChangeFinished = {
                             drag?.let { vm.onEvent(ComicEvent.SeekTo(it.roundToInt())) }
                             drag = null

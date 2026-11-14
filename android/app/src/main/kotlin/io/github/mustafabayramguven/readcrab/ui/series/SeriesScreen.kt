@@ -8,6 +8,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -199,7 +200,7 @@ fun SeriesScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(detail?.name ?: "") },
+                title = { Text(detail?.name ?: "", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
@@ -259,7 +260,8 @@ fun SeriesScreen(
         },
         snackbarHost = { SnackbarHost(snackbar) },
     ) { pad ->
-        LazyColumn(Modifier.fillMaxSize().padding(pad)) {
+        // alt boşluk: ExtendedFAB (56) + kenar (16) son satırı örtmesin
+        LazyColumn(Modifier.fillMaxSize().padding(pad), contentPadding = PaddingValues(bottom = 88.dp)) {
             items(books, key = { it.id }) { b ->
                 BookRow(
                     b = b,
