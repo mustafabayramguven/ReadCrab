@@ -2556,3 +2556,16 @@ dialog.sheet.reader-settings::backdrop {
   margin: 0;
   color: var(--md-sys-color-on-surface-variant);
 }
+
+/* Dar ekranda kitap satırının sağındaki rozet ve düğmeler sıkışık durur; başlığa yer kalır.
+   Simge düğmeleri 48px dokunma alanını korur. */
+@media (max-width: 599px) {
+  .list-item:has(.dl-btn) {
+    gap: 0;
+    padding-right: 4px;
+  }
+
+  .list-item:has(.dl-btn) .list-item-main {
+    margin-right: 8px;
+  }
+}
