@@ -347,6 +347,8 @@ struct BookDetailRes {
     status: String,
     percent: f64,
     locator: String,
+    /// Konumun son yazılma zamanı; okuyucu çakışma denetiminde temel alır.
+    progress_updated_at: i64,
     cover_version: i64,
     next_book_id: Option<i64>,
     next_book_title: Option<String>,
@@ -377,7 +379,8 @@ async fn get_book(
                         CASE WHEN p.status = 'finished' THEN 1.0 ELSE COALESCE(p.percent, 0.0) END,
                         COALESCE(p.locator, ''),
                         b.cover_version,
-                        b.sort_index
+                        b.sort_index,
+                        COALESCE(p.updated_at, 0)
                      FROM books b
                      JOIN series s ON s.id = b.series_id
                      LEFT JOIN progress p ON p.book_id = b.id AND p.user_id = ?1
@@ -396,6 +399,7 @@ async fn get_book(
                                 status: r.get(7)?,
                                 percent: r.get(8)?,
                                 locator: r.get(9)?,
+                                progress_updated_at: r.get(12)?,
                                 cover_version: r.get(10)?,
                                 next_book_id: None,
                                 next_book_title: None,

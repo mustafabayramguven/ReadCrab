@@ -65,7 +65,7 @@ fn v1_database_keeps_data() {
     let v: i32 = c
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .unwrap();
-    assert_eq!(v, 2);
+    assert_eq!(v, 3);
     // Eski sütunlar birebir aynı: yeni sütunlar hariç karşılaştır.
     let after = dump(&c);
     for ((t, b), (_, a)) in before.iter().zip(after.iter()) {
@@ -73,6 +73,12 @@ fn v1_database_keeps_data() {
             assert_eq!(a.len(), b.len());
             for (x, y) in a.iter().zip(b.iter()) {
                 assert_eq!(x, &format!("{y}|Integer(0)|Integer(0)"));
+            }
+        } else if *t == "progress" {
+            // 0003: yazan istemci kimliği boş başlar.
+            assert_eq!(a.len(), b.len());
+            for (x, y) in a.iter().zip(b.iter()) {
+                assert_eq!(x, &format!("{y}|Null"));
             }
         } else {
             assert_eq!(a, b, "{t}");

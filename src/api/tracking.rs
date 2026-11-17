@@ -1,6 +1,7 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
+    response::{IntoResponse, Response},
     routing::{get, post, put},
     Json, Router,
 };
@@ -73,6 +74,10 @@ struct ProgressRes {
     locator: String,
     percent: f64,
     status: String,
+    /// Son yazma zamanı (unix saniye); konum hiç yazılmadıysa 0.
+    updated_at: i64,
+    /// Son yazan sekmenin kimliği; durum değişikliği veya eski istemci yazdıysa boş.
+    client_id: Option<String>,
 }
 
 async fn get_progress(
@@ -97,7 +102,7 @@ async fn get_progress(
 
             let row: Option<ProgressRes> = conn
                 .query_row(
-                    "SELECT locator, percent, status
+                    "SELECT locator, percent, status, updated_at, client_id
                      FROM progress
                      WHERE user_id = ?1 AND book_id = ?2",
                     rusqlite::params![user_id, id],
@@ -106,6 +111,8 @@ async fn get_progress(
                             locator: r.get(0)?,
                             percent: r.get(1)?,
                             status: r.get(2)?,
+                            updated_at: r.get(3)?,
+                            client_id: r.get(4)?,
                         })
                     },
                 )
@@ -115,6 +122,8 @@ async fn get_progress(
                 locator: String::new(),
                 percent: 0.0,
                 status: "unread".to_string(),
+                updated_at: 0,
+                client_id: None,
             }))
         })
         .await?;
@@ -127,12 +136,32 @@ struct PutProgressReq {
     locator: String,
     percent: f64,
     local_date: String,
+    /// Yazan sekmenin kimliği (32 hex). Eski istemciler göndermez.
+    #[serde(default)]
+    client_id: Option<String>,
+    /// İstemcinin bildiği son `updated_at`. Sunucudaki kayıt bundan yeniyse ve başka bir
+    /// sekme yazdıysa, eski konum yeni konumun üstüne yazılmaz: 409 ve güncel kayıt döner.
+    #[serde(default)]
+    base_updated_at: Option<i64>,
 }
 
 #[derive(Serialize)]
 struct PutProgressRes {
     status: String,
     percent: f64,
+    updated_at: i64,
+}
+
+#[derive(Serialize)]
+struct ProgressConflictRes {
+    error: &'static str,
+    message: &'static str,
+    progress: ProgressRes,
+}
+
+enum PutOutcome {
+    Saved(PutProgressRes),
+    Conflict(ProgressRes),
 }
 
 async fn put_progress(
@@ -140,12 +169,19 @@ async fn put_progress(
     State(state): State<AppState>,
     Path(id): Path<i64>,
     JsonBody(req): JsonBody<PutProgressReq>,
-) -> Result<Json<PutProgressRes>, AppError> {
+) -> Result<Response, AppError> {
     if !req.percent.is_finite() || !(0.0..=1.0).contains(&req.percent) {
         return Err(AppError::BadRequest("Geçersiz ilerleme yüzdesi."));
     }
     if req.locator.len() > 200 {
         return Err(AppError::BadRequest("Konum bilgisi çok uzun."));
+    }
+    if req
+        .client_id
+        .as_deref()
+        .is_some_and(|c| !valid_client_id(c))
+    {
+        return Err(AppError::BadRequest("Geçersiz client_id."));
     }
     parse_local_date(&req.local_date)?;
 
@@ -154,8 +190,10 @@ async fn put_progress(
     let percent = req.percent;
     let locator = req.locator;
     let local_date = req.local_date;
+    let client_id = req.client_id;
+    let base = req.base_updated_at;
 
-    let status = state
+    let outcome = state
         .db
         .run(move |conn| {
             let exists: Option<i64> = conn
@@ -167,6 +205,36 @@ async fn put_progress(
                 .optional()?;
             if exists.is_none() {
                 return Err(AppError::NotFound);
+            }
+
+            let current: Option<ProgressRes> = conn
+                .query_row(
+                    "SELECT locator, percent, status, updated_at, client_id
+                     FROM progress
+                     WHERE user_id = ?1 AND book_id = ?2",
+                    rusqlite::params![user_id, id],
+                    |r| {
+                        Ok(ProgressRes {
+                            locator: r.get(0)?,
+                            percent: r.get(1)?,
+                            status: r.get(2)?,
+                            updated_at: r.get(3)?,
+                            client_id: r.get(4)?,
+                        })
+                    },
+                )
+                .optional()?;
+            if let (Some(cur), Some(base), Some(mine)) = (&current, base, &client_id) {
+                let other_writer = cur.client_id.as_deref().is_some_and(|c| c != mine);
+                if other_writer && cur.updated_at > base && !cur.locator.is_empty() {
+                    return Ok(PutOutcome::Conflict(ProgressRes {
+                        locator: cur.locator.clone(),
+                        percent: cur.percent,
+                        status: cur.status.clone(),
+                        updated_at: cur.updated_at,
+                        client_id: cur.client_id.clone(),
+                    }));
+                }
             }
 
             let prev: Option<(String, Option<String>)> = conn
@@ -197,14 +265,15 @@ async fn put_progress(
 
             conn.execute(
                 "INSERT INTO progress(
-                    user_id, book_id, locator, percent, status, finished_date, updated_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                    user_id, book_id, locator, percent, status, finished_date, updated_at, client_id
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
                  ON CONFLICT(user_id, book_id) DO UPDATE SET
                     locator = excluded.locator,
                     percent = excluded.percent,
                     status = excluded.status,
                     finished_date = excluded.finished_date,
-                    updated_at = excluded.updated_at",
+                    updated_at = excluded.updated_at,
+                    client_id = excluded.client_id",
                 rusqlite::params![
                     user_id,
                     id,
@@ -212,15 +281,31 @@ async fn put_progress(
                     percent,
                     new_status,
                     new_finished_date,
-                    now
+                    now,
+                    client_id
                 ],
             )?;
 
-            Ok(new_status)
+            Ok(PutOutcome::Saved(PutProgressRes {
+                status: new_status,
+                percent,
+                updated_at: now,
+            }))
         })
         .await?;
 
-    Ok(Json(PutProgressRes { status, percent }))
+    Ok(match outcome {
+        PutOutcome::Saved(res) => Json(res).into_response(),
+        PutOutcome::Conflict(progress) => (
+            StatusCode::CONFLICT,
+            Json(ProgressConflictRes {
+                error: "conflict",
+                message: "Başka bir cihazda daha yeni bir konum var.",
+                progress,
+            }),
+        )
+            .into_response(),
+    })
 }
 
 #[derive(Deserialize)]
@@ -294,7 +379,8 @@ async fn put_status(
                  ON CONFLICT(user_id, book_id) DO UPDATE SET
                     status = excluded.status,
                     finished_date = excluded.finished_date,
-                    updated_at = excluded.updated_at",
+                    updated_at = excluded.updated_at,
+                    client_id = NULL",
                 rusqlite::params![user_id, id, status_clone, finished_date, now],
             )?;
             Ok(())

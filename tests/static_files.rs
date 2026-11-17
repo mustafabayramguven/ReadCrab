@@ -38,6 +38,8 @@ async fn static_files_have_expected_types() {
         ("fonts/roboto-flex-latin.woff2", "font/woff2"),
         ("fonts/roboto-flex-latin-ext.woff2", "font/woff2"),
         ("calc.js", "application/javascript; charset=utf-8"),
+        ("offline.js", "application/javascript; charset=utf-8"),
+        ("sw.js", "application/javascript; charset=utf-8"),
         ("reader-ui.js", "application/javascript; charset=utf-8"),
         ("reader-fonts.css", "text/css; charset=utf-8"),
         ("manifest.webmanifest", "application/manifest+json"),
@@ -66,6 +68,7 @@ async fn static_files_have_expected_types() {
         if name == "icons.svg" {
             let text = String::from_utf8(bytes).unwrap();
             assert!(text.contains("<symbol id=\"menu_book\""));
+            assert!(text.contains("<symbol id=\"download\""));
         }
     }
 }
@@ -142,6 +145,7 @@ async fn index_html_script_and_style_rules() {
     for other in [
         "tracker.js",
         "calc.js",
+        "offline.js",
         "reader-ui.js",
         "reader-comic.js",
         "reader-text.js",
@@ -167,7 +171,7 @@ async fn index_html_script_and_style_rules() {
         count += 1;
         rest = &after[end + 1..];
     }
-    assert_eq!(count, 8);
+    assert_eq!(count, 9);
 
     // calc.js ve reader-ui.js, reader-comic.js'ten önce
     let comic = html.find("/static/reader-comic.js").unwrap();
@@ -187,4 +191,32 @@ async fn index_html_script_and_style_rules() {
         "CDN bağlantısı var"
     );
     assert!(!html.contains("style="), "style= özniteliği var");
+}
+
+#[tokio::test]
+async fn service_worker_may_control_the_whole_app() {
+    let (app, _dirs) = test_app().await;
+    let res = get(&app, "/static/sw.js").await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers()["service-worker-allowed"].to_str().unwrap(),
+        "/"
+    );
+    let text = String::from_utf8(body_bytes(res).await).unwrap();
+    // kabuk listesindeki her dosya gerçekten sunuluyor olmalı (yoksa kurulum başarısız olur)
+    let list = text
+        .split("var SHELL_URLS = [")
+        .nth(1)
+        .unwrap()
+        .split(']')
+        .next()
+        .unwrap();
+    for url in list
+        .split(',')
+        .map(|s| s.trim().trim_matches('\''))
+        .filter(|s| !s.is_empty())
+    {
+        let res = get(&app, url).await;
+        assert_eq!(res.status(), StatusCode::OK, "{url}");
+    }
 }
