@@ -18,7 +18,7 @@ Kitaplarınızı `./books` altına koyun; her seri için bir klasör oluşturun.
 docker compose pull && docker compose up -d
 ```
 
-Veritabanı ilk açılışta otomatik olarak yeni şemaya geçer (`user_version` 1'den 2'ye); kitaplar, ilerleme ve hesaplar korunur. Güncellemeden önce `readcrab-data` volume'unun bir yedeğini almanız önerilir.
+Veritabanı ilk açılışta otomatik olarak yeni şemaya geçer (`user_version` 3'e kadar); kitaplar, ilerleme ve hesaplar korunur. Güncellemeden önce `readcrab-data` volume'unun bir yedeğini almanız önerilir.
 
 ## Özellikler
 
@@ -33,7 +33,9 @@ Veritabanı ilk açılışta otomatik olarak yeni şemaya geçer (`user_version`
 - **Çizgi roman:** Sağdan sola okuma yönü ve dikey (webtoon) görünüm.
 - **Tahmini kalan süre:** Kitabın kendi okuma hızına göre.
 - **Tam ekran** düğmesi (tarayıcı destekliyorsa) ve okuma sırasında ekranın açık kalması (tarayıcı destekliyorsa).
-- **Ana ekrana ekleme (PWA):** Uygulama manifesti ve simgeleri vardır. Service worker yoktur; uygulama çevrimdışı çalışmaz. Ana ekrana ekleme için tarayıcı güvenli bağlantı (HTTPS veya `localhost`) ister.
+- **Ana ekrana ekleme (PWA):** Uygulama manifesti ve simgeleri vardır. Ana ekrana ekleme ve çevrimdışı okuma için tarayıcı güvenli bağlantı (HTTPS veya `localhost`) ister.
+- **Çevrimdışı okuma:** Seri sayfasında kitabın yanındaki indirme düğmesiyle kitap cihaza kaydedilir (bölümler/sayfalar ve görseller). İnternet yokken Kütüphane'deki **İndirilenler** rafından açılır; bu sırada değişen konum cihazda bekletilir ve bağlantı gelince gönderilir. Çıkış yapınca indirilenler silinir.
+- **Cihazlar arası konum (Play Books gibi):** Metin kitaplarda konum ekran oranıyla değil metindeki karakterle tutulur; telefon ve bilgisayar farklı genişlik ve yazı boyutunda aynı paragrafı açar. Yazı ayarı veya pencere boyu değişince de aynı yerde kalınır. Başka bir cihazda daha ileri okuduysan, kitaba ya da uygulamaya dönünce "Oraya git" önerilir. Açık kalmış eski bir sekme, başka cihazdaki daha yeni konumun üstüne yazamaz.
 
 ## Ortam değişkenleri
 

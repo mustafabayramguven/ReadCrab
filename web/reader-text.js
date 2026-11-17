@@ -46,6 +46,9 @@
     var prefs = KRS.readerPrefs.get();
     var curChapter = 0;
     var curRatio = 0;
+    // Metin çapası (0..1, boşluk dışı karakter oranı). null: henüz ölçülmedi, curRatio kullanılır.
+    var curT = null;
+    var anchorTimer = null;
     var pageIdx = 0;
     var pageTotal = 1;
     var frameReady = false;
@@ -59,16 +62,10 @@
     var disposed = false;
 
     if (book.locator) {
-      try {
-        var parsed = JSON.parse(book.locator);
-        if (parsed && typeof parsed === 'object') {
-          var ch = parseInt(parsed.ch, 10);
-          if (Number.isFinite(ch) && ch >= 0 && ch < totalChapters) {
-            curChapter = ch;
-          }
-          curRatio = clamp01(parsed.p);
-        }
-      } catch (_) {}
+      var parsed = calc.parseTextLocator(book.locator, totalChapters);
+      curChapter = parsed.ch;
+      curRatio = parsed.p;
+      curT = parsed.t;
     }
 
     function isPaged() {
@@ -107,7 +104,8 @@
 
     var bookmarks = ui.bookmarkController(book, {
       getLocator: function () {
-        return JSON.stringify({ ch: curChapter, p: Number(curRatio.toFixed(6)) });
+        measureAnchor();
+        return calc.textLocator(curChapter, curRatio, curT);
       },
       getLabel: function () {
         return 'Bölüm ' + (curChapter + 1) + ' · %' + Math.round(overallRatio() * 100);
@@ -211,13 +209,14 @@
     var tocList = el('ul', { className: 'list' });
     var searchUi = ui.searchPanel(book, function (chIdx, p) {
       navSheet.dialog.close();
-      gotoPosition(chIdx, p);
+      // arama sonucu metin içi karakter oranıdır: çapa olarak kullanılır
+      gotoPosition(chIdx, p, p);
     });
     var bmList = bookmarks.buildList(function (bm) {
       try {
-        var loc = JSON.parse(bm.locator);
+        var loc = calc.parseTextLocator(bm.locator, totalChapters);
         navSheet.dialog.close();
-        gotoPosition(Number(loc.ch) || 0, clamp01(loc.p));
+        gotoPosition(loc.ch, loc.p, loc.t);
       } catch (_) {}
     });
     var TAB_TITLES = { toc: 'İçindekiler', marks: 'Yer imleri', search: 'Ara' };
@@ -338,15 +337,125 @@
       return overall;
     }
 
-    function persist(overall) {
+    // ---- Metin çapası -----------------------------------------------------------------
+    // Konum ekran oranı yerine metindeki karakterle tutulur: telefon ve bilgisayar farklı
+    // genişlik ve yazı boyutunda aynı cümleyi açar (Play Books gibi).
+    function textNodesOf(doc) {
+      var out = [];
+      if (!doc || !doc.body) return out;
+      var walker = doc.createTreeWalker(doc.body, 4 /* NodeFilter.SHOW_TEXT */);
+      for (var n = walker.nextNode(); n; n = walker.nextNode()) out.push(n);
+      return out;
+    }
+
+    function visibleRect(r, pw, ph) {
+      return r.width + r.height > 0 && r.right > 0 && r.left < pw && r.bottom > 0 && r.top < ph;
+    }
+
+    // Görünür alandaki ilk karakterin çapası.
+    function anchorAtViewport(doc) {
+      var total = calc.weigh(doc && doc.body ? doc.body.textContent : '');
+      if (!total) return null;
+      var pw = iframe.clientWidth;
+      var ph = iframe.clientHeight;
+      var nodes = textNodesOf(doc);
+      var range = doc.createRange();
+      var before = 0;
+      for (var i = 0; i < nodes.length; i++) {
+        var node = nodes[i];
+        var w = calc.weigh(node.data);
+        if (!w) continue;
+        range.selectNodeContents(node);
+        var rects = range.getClientRects();
+        var seen = false;
+        for (var k = 0; k < rects.length; k++) {
+          if (visibleRect(rects[k], pw, ph)) {
+            seen = true;
+            break;
+          }
+        }
+        if (seen) {
+          var count = 0;
+          for (var j = 0; j < node.data.length; j++) {
+            if (calc.isSpace(node.data[j])) continue;
+            range.setStart(node, j);
+            range.setEnd(node, j + 1);
+            if (visibleRect(range.getBoundingClientRect(), pw, ph)) {
+              return clamp01((before + count) / total);
+            }
+            count++;
+          }
+        }
+        before += w;
+      }
+      return null;
+    }
+
+    // Çapadaki karakterin belge içindeki dikdörtgeni (kaydırma payı dahil değil).
+    function anchorRect(doc, t) {
+      var total = calc.weigh(doc && doc.body ? doc.body.textContent : '');
+      if (!total) return null;
+      var remaining = Math.min(total - 1, Math.floor(clamp01(t) * total));
+      var nodes = textNodesOf(doc);
+      var range = doc.createRange();
+      for (var i = 0; i < nodes.length; i++) {
+        var node = nodes[i];
+        var w = calc.weigh(node.data);
+        if (remaining >= w) {
+          remaining -= w;
+          continue;
+        }
+        for (var j = 0; j < node.data.length; j++) {
+          if (calc.isSpace(node.data[j])) continue;
+          if (remaining === 0) {
+            range.setStart(node, j);
+            range.setEnd(node, j + 1);
+            var r = range.getBoundingClientRect();
+            return r.width + r.height > 0 ? r : null;
+          }
+          remaining--;
+        }
+      }
+      return null;
+    }
+
+    // Kullanıcı hareket edince çapa bayatlar; kayıt sırasında yeniden ölçülür.
+    function measureAnchor() {
+      if (curT !== null || restoring || !frameReady) return;
+      var doc = frameDoc();
+      if (doc) curT = anchorAtViewport(doc);
+    }
+
+    function flushAnchor() {
+      if (!anchorTimer) return;
+      clearTimeout(anchorTimer);
+      anchorTimer = null;
+      if (disposed || !frameReady || !KRS.tracker) return;
+      measureAnchor();
+      KRS.tracker.scheduleProgress(book.id, calc.textLocator(curChapter, curRatio, curT), overallRatio());
+    }
+
+    function persist() {
       // yeni çerçeve hazır olana kadar eski konum kaydedilmez
       if (!KRS.tracker || !frameReady) return;
-      KRS.tracker.scheduleProgress(
-        book.id,
-        JSON.stringify({ ch: curChapter, p: Number(curRatio.toFixed(6)) }),
-        overall
-      );
+      if (anchorTimer) clearTimeout(anchorTimer);
+      var gen = frameGen;
+      anchorTimer = setTimeout(function () {
+        if (gen !== frameGen) {
+          anchorTimer = null;
+          return;
+        }
+        flushAnchor();
+      }, 250);
     }
+
+    function onHidden() {
+      if (document.visibilityState === 'hidden') {
+        flushAnchor();
+        if (KRS.tracker) KRS.tracker.flushProgress(true);
+      }
+    }
+    document.addEventListener('visibilitychange', onHidden);
 
     function updateNavButtons() {
       prevChBtn.disabled = curChapter <= 0;
@@ -411,19 +520,32 @@
       st.setProperty('--mx', Math.round((pw * prefs.mg) / 100) + 'px');
       var se = scrollEl(doc);
       restoring = true;
+      // çapa varsa düzen değişse de aynı karakter görünür kalır; yoksa oran kullanılır
+      var anchor = curT !== null ? anchorRect(doc, curT) : null;
       if (isPaged()) {
         var range = doc.createRange();
         range.selectNodeContents(doc.body);
         var contentRight = range.getBoundingClientRect().right + (se ? se.scrollLeft : 0);
         pageTotal = calc.pageCount(contentRight, pw);
-        pageIdx = calc.pageFromRatio(curRatio, pageTotal);
+        if (anchor) {
+          var x = anchor.left + (se ? se.scrollLeft : 0);
+          pageIdx = Math.max(0, Math.min(pageTotal - 1, Math.floor((x + 1) / Math.max(1, pw))));
+          curRatio = calc.ratioFromPage(pageIdx, pageTotal);
+        } else {
+          pageIdx = calc.pageFromRatio(curRatio, pageTotal);
+        }
         win.scrollTo({ left: pageIdx * pw, top: 0, behavior: 'auto' });
       } else {
         pageTotal = 1;
         pageIdx = 0;
         if (se) {
           var maxScroll = Math.max(0, se.scrollHeight - se.clientHeight);
-          se.scrollTop = Math.round(curRatio * maxScroll);
+          if (anchor) {
+            se.scrollTop = Math.max(0, Math.min(maxScroll, Math.round(anchor.top + se.scrollTop - 2)));
+            curRatio = maxScroll > 0 ? clamp01(se.scrollTop / maxScroll) : 0;
+          } else {
+            se.scrollTop = Math.round(curRatio * maxScroll);
+          }
         }
       }
       // kaydırma olayları eşzamansız gelir; kilit çift requestAnimationFrame sonrası açılır
@@ -472,6 +594,7 @@
     function commitPage(i) {
       pageIdx = i;
       curRatio = calc.ratioFromPage(i, pageTotal);
+      curT = null;
       var overall = updateProgressUi();
       if (KRS.tracker) KRS.tracker.addPage(curChapter + ':' + i);
       persist(overall);
@@ -526,6 +649,7 @@
       var ratio = maxScroll > 0 ? clamp01(se.scrollTop / maxScroll) : 0;
       // kesirli kaydırma/yakınlaştırmada 0.997'de kalmasın: alt uca varınca tam 1
       if (se.scrollTop + se.clientHeight >= se.scrollHeight - 2) ratio = 1;
+      if (Math.abs(ratio - curRatio) > 1e-6) curT = null;
       curRatio = ratio;
       var overall = updateProgressUi();
       var screenIdx = Math.floor(se.scrollTop / Math.max(1, se.clientHeight));
@@ -654,8 +778,9 @@
       iframe.style.display = '';
     }
 
-    function loadChapter(idx, targetRatio, saveProg) {
+    function loadChapter(idx, targetRatio, saveProg, targetT) {
       if (idx < 0 || idx >= totalChapters) return;
+      flushAnchor();
       clearErrBox();
       frameReady = false;
       frameGen++;
@@ -664,6 +789,8 @@
       if (snapTimer) clearTimeout(snapTimer);
       curChapter = idx;
       curRatio = clamp01(targetRatio);
+      // bölüm başı kesin bilinir; bölüm sonu (önceki bölüme dönüş) ölçülerek bulunur
+      curT = targetT !== undefined && targetT !== null ? clamp01(targetT) : curRatio === 0 ? 0 : null;
       updateNavButtons();
       applyFrameStyles();
       updateProgressUi();
@@ -673,7 +800,10 @@
         if (disposed || (myGen !== undefined && myGen !== KRS.routeGen)) return;
         var doc = frameDoc();
         if (!doc || doc.contentType !== 'text/html') {
-          var errMsg = 'Bölüm yüklenemedi.';
+          var errMsg =
+            navigator.onLine === false
+              ? 'Çevrimdışısın. Bu kitabı internetsiz okumak için seri sayfasından indir.'
+              : 'Bölüm yüklenemedi.';
           if (doc && doc.body) {
             try {
               var errJson = JSON.parse(doc.body.textContent || '');
@@ -698,7 +828,7 @@
               text: 'Yeniden dene',
               onClick: function () {
                 clearErrBox();
-                loadChapter(curChapter, curRatio, saveProg);
+                loadChapter(curChapter, curRatio, saveProg, curT);
               }
             })
           ]);
@@ -728,16 +858,30 @@
     }
 
     // Aynı bölümdeyse çerçeve yeniden yüklenmeden konuma gider.
-    function gotoPosition(chIdx, p) {
+    function gotoPosition(chIdx, p, t) {
       var target = Math.max(0, Math.min(totalChapters - 1, chIdx));
+      var anchor = t === undefined || t === null ? null : clamp01(t);
       if (target === curChapter && frameReady) {
         curRatio = clamp01(p);
+        curT = anchor;
         relayout();
         persist(overallRatio());
       } else {
-        loadChapter(target, p, true);
+        loadChapter(target, p, true, anchor);
       }
     }
+
+    // Başka cihazdaki daha yeni konum: "Oraya git" önerisi.
+    var stopSync = ui.syncWatcher(book, {
+      describe: function (remote) {
+        var loc = calc.parseTextLocator(remote.locator, totalChapters);
+        return 'Bölüm ' + (loc.ch + 1) + ' · %' + Math.round(clamp01(remote.percent) * 100);
+      },
+      apply: function (remote) {
+        var loc = calc.parseTextLocator(remote.locator, totalChapters);
+        gotoPosition(loc.ch, loc.p, loc.t);
+      }
+    });
 
     // ---- Tuşlar ------------------------------------------------------------------------
     function handleKey(e) {
@@ -827,14 +971,17 @@
       KRS.tracker.start(book.id, (curChapter + curRatio) / totalChapters);
     }
     applyFrameStyles();
-    loadChapter(curChapter, curRatio, false);
+    loadChapter(curChapter, curRatio, false, curT);
     scheduleHideBars();
 
     window.addEventListener('keydown', handleKey);
     window.addEventListener('pointermove', onUserMove, { passive: true });
 
     return function cleanup() {
+      flushAnchor();
       disposed = true;
+      stopSync();
+      document.removeEventListener('visibilitychange', onHidden);
       if (hideTimer) clearTimeout(hideTimer);
       if (relayoutTimer) clearTimeout(relayoutTimer);
       if (snapTimer) clearTimeout(snapTimer);

@@ -200,9 +200,10 @@
       snackbar.appendChild(btn);
     }
     snackbar.classList.add('visible');
+    var duration = opts && opts.duration > 0 ? opts.duration : 4000;
     toastTimer = setTimeout(function () {
       snackbar.classList.remove('visible');
-    }, 4000);
+    }, duration);
   }
 
   function confirmDialog(title, text, okLabel) {
@@ -457,6 +458,7 @@
             try {
               await api('POST', '/api/logout', {});
             } catch (_) {}
+            if (KRS.offline) await KRS.offline.clearUserData();
             KRS.me = null;
             navigate('#/giris');
           }
@@ -777,6 +779,7 @@
     // Raf yalnız süzgeç yokken görünür; DOM'da kalır.
     function updateShelf() {
       shelf.hidden = !(shelfCount > 0 && state.q === '' && state.status === 'all');
+      if (typeof renderDownloads === 'function') renderDownloads();
     }
 
     async function loadShelf() {
@@ -806,8 +809,45 @@
       }
     }
 
+    // İndirilen kitaplar: internet yokken de buradan açılır.
+    var dlTrack = el('ul', { className: 'shelf-track' });
+    var dlNote = el('p', { className: 'type-body-medium offline-note', text: '' });
+    var dlShelf = el('section', { className: 'shelf', 'aria-label': 'İndirilenler' }, [
+      el('h2', { className: 'type-title-medium', text: 'İndirilenler' }),
+      dlNote,
+      dlTrack
+    ]);
+    dlShelf.hidden = true;
+    function renderDownloads() {
+      if (!KRS.offline || !active) return;
+      var items = KRS.offline.list();
+      var offline = navigator.onLine === false;
+      clearNode(dlTrack);
+      items.forEach(function (it) {
+        dlTrack.appendChild(
+          el('li', {}, [
+            el('a', { href: '#/oku/' + it.id, className: 'shelf-card' }, [
+              el('div', { className: 'shelf-cover' }, [
+                makeCoverNode(it.id, it.title, it.cover_version)
+              ]),
+              el('span', { className: 'shelf-title type-label-large', text: it.title })
+            ])
+          ])
+        );
+      });
+      dlNote.textContent = offline
+        ? 'Çevrimdışısın. İndirdiğin kitapları okuyabilirsin; ilerlemen bağlantı gelince eşitlenir.'
+        : '';
+      dlNote.hidden = !offline;
+      dlShelf.hidden = !(items.length > 0 && state.q === '' && state.status === 'all') && !offline;
+    }
+    var stopDownloads = KRS.offline ? KRS.offline.onChange(renderDownloads) : function () {};
+    window.addEventListener('online', renderDownloads);
+    window.addEventListener('offline', renderDownloads);
+
     var controls = el('div', { className: 'library-controls' }, [
       searchBar,
+      dlShelf,
       shelf,
       el('div', { className: 'chip-row' }, [sortGroup, statusGroup])
     ]);
@@ -1060,10 +1100,14 @@
 
     loadSeries(true);
     loadShelf();
+    renderDownloads();
     pollScan(false);
 
     setCleanup(function () {
       active = false;
+      stopDownloads();
+      window.removeEventListener('online', renderDownloads);
+      window.removeEventListener('offline', renderDownloads);
       if (debounceId) clearTimeout(debounceId);
       if (scanPollTimer) {
         clearTimeout(scanPollTimer);
@@ -1308,6 +1352,12 @@
 
       var list = el('ul', { className: 'list' });
       var books = data.books || [];
+      var unsubs = [];
+      setCleanup(function () {
+        unsubs.forEach(function (fn) {
+          fn();
+        });
+      });
       for (var i = 0; i < books.length; i++) {
         (function (b) {
           var hasErr = Boolean(b.error);
@@ -1358,10 +1408,12 @@
             [icon('more_vert')]
           );
 
+          var dl = hasErr ? null : downloadButton(b);
+          if (dl) unsubs.push(dl.stop);
           var li = el(
             'li',
             { className: 'list-item' + (hasErr ? ' is-error' : '') },
-            [mainLink, stBadge, moreBtn]
+            [mainLink, stBadge, dl ? dl.el : null, moreBtn]
           );
           list.appendChild(li);
         })(books[i]);
@@ -1386,6 +1438,58 @@
         ])
       );
     }
+  }
+
+  // Çevrimdışı okuma için indir / iptal / kaldır düğmesi.
+  function downloadButton(b) {
+    var off = KRS.offline;
+    if (!off || !off.supported) return null;
+    var btn = el('button', { type: 'button', className: 'icon-btn dl-btn' });
+    function render() {
+      var st = off.state(b.id);
+      clearNode(btn);
+      btn.classList.toggle('is-ready', st.state === 'ready');
+      if (st.state === 'downloading') {
+        var pct = st.total ? Math.floor((st.done * 100) / st.total) : 0;
+        btn.appendChild(el('span', { className: 'dl-pct type-label-small', text: '%' + pct }));
+        btn.setAttribute('aria-label', b.title + ' indiriliyor. İptal et');
+      } else if (st.state === 'ready') {
+        btn.appendChild(icon('download_done'));
+        btn.setAttribute('aria-label', b.title + ' indirildi. Cihazdan kaldır');
+      } else {
+        btn.appendChild(icon('download'));
+        btn.setAttribute('aria-label', b.title + ' kitabını çevrimdışı okumak için indir');
+      }
+      btn.title = btn.getAttribute('aria-label');
+    }
+    btn.addEventListener('click', async function (e) {
+      e.stopPropagation();
+      var st = off.state(b.id);
+      if (st.state === 'downloading') {
+        off.cancel(b.id);
+        return;
+      }
+      if (st.state === 'ready') {
+        var ok = await confirmDialog(
+          'İndirmeyi kaldır',
+          '"' + b.title + '" bu cihazdan silinsin mi? Okuma ilerlemen korunur.',
+          'Kaldır'
+        );
+        if (ok) await off.remove(b.id);
+        return;
+      }
+      try {
+        await off.download({ id: b.id });
+        toast('"' + b.title + '" çevrimdışı okunabilir.');
+      } catch (err) {
+        if (err && err.message !== 'İptal edildi.') toast(err.message || 'İndirilemedi.');
+      }
+    });
+    render();
+    var stop = off.onChange(function (id) {
+      if (id === 0 || id === Number(b.id)) render();
+    });
+    return { el: btn, stop: stop };
   }
 
   // Okuyucu (#/oku/{bookId})

@@ -892,7 +892,70 @@
     };
   }
 
+  // Play Books gibi: başka bir cihazda daha yeni bir konum varsa "Oraya git" önerilir.
+  // Kitap açıkken uygulamaya/sekmeye dönünce ve bağlantı gelince sunucu yoklanır; eski bir
+  // sekmenin kaydı sunucuda reddedildiğinde (409) de aynı öneri gösterilir.
+  function syncWatcher(book, opts) {
+    var tracker = KRS.tracker;
+    if (!tracker) return function () {};
+    tracker.setBase(book.id, Number(book.progress_updated_at) || 0);
+    var disposed = false;
+    var checking = false;
+    var lastOffered = 0;
+
+    function offer(remote) {
+      if (disposed || !remote || !remote.locator) return;
+      var at = Number(remote.updated_at) || 0;
+      // görmezden gelip okumaya devam etmek "burada kal" sayılır: sonraki kayıt yazılır
+      tracker.setBase(book.id, at);
+      if (at <= lastOffered) return;
+      lastOffered = at;
+      KRS.toast('Başka bir cihazda ' + opts.describe(remote) + ' konumundasın.', {
+        action: 'Oraya git',
+        duration: 12000,
+        onAction: function () {
+          if (!disposed) opts.apply(remote);
+        }
+      });
+    }
+
+    async function check() {
+      if (disposed || checking || document.visibilityState !== 'visible') return;
+      checking = true;
+      try {
+        var remote = await KRS.api('GET', '/api/books/' + book.id + '/progress');
+        if (
+          remote &&
+          Number(remote.updated_at) > tracker.getBase(book.id) &&
+          remote.client_id &&
+          remote.client_id !== tracker.clientId
+        ) {
+          offer(remote);
+        }
+      } catch (_) {
+        // çevrimdışı okuma sürer
+      } finally {
+        checking = false;
+      }
+    }
+
+    function onConflict(bookId, remote) {
+      if (Number(bookId) === Number(book.id)) offer(remote);
+    }
+
+    KRS.onProgressConflict = onConflict;
+    document.addEventListener('visibilitychange', check);
+    window.addEventListener('online', check);
+    return function stop() {
+      disposed = true;
+      if (KRS.onProgressConflict === onConflict) KRS.onProgressConflict = null;
+      document.removeEventListener('visibilitychange', check);
+      window.removeEventListener('online', check);
+    };
+  }
+
   KRS.readerUi = {
+    syncWatcher: syncWatcher,
     FONTS: FONTS,
     fontFamily: fontFamily,
     resolveTheme: resolveTheme,

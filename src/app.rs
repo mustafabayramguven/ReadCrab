@@ -37,6 +37,8 @@ const FRAME_CSS: &str = include_str!("../web/frame.css");
 const FAVICON_SVG: &str = include_str!("../web/favicon.svg");
 const ICONS_SVG: &str = include_str!("../web/icons.svg");
 const CALC_JS: &str = include_str!("../web/calc.js");
+const OFFLINE_JS: &str = include_str!("../web/offline.js");
+const SW_JS: &str = include_str!("../web/sw.js");
 const READER_UI_JS: &str = include_str!("../web/reader-ui.js");
 const READER_FONTS_CSS: &str = include_str!("../web/reader-fonts.css");
 const MANIFEST: &str = include_str!("../web/manifest.webmanifest");
@@ -266,6 +268,25 @@ async fn index_handler() -> Response {
 }
 
 async fn static_handler(Path(ad): Path<String>) -> Result<Response, AppError> {
+    // Service worker /static altında durur ama tüm uygulamayı (kapsam "/") yönetir.
+    if ad == "sw.js" {
+        return Ok((
+            StatusCode::OK,
+            [
+                (
+                    header::CONTENT_TYPE,
+                    "application/javascript; charset=utf-8",
+                ),
+                (header::CACHE_CONTROL, "no-cache"),
+                (
+                    header::HeaderName::from_static("service-worker-allowed"),
+                    "/",
+                ),
+            ],
+            SW_JS,
+        )
+            .into_response());
+    }
     if let Some((_, bytes)) = RPFONTS.iter().find(|(n, _)| *n == ad) {
         return Ok((
             StatusCode::OK,
@@ -312,6 +333,11 @@ async fn static_handler(Path(ad): Path<String>) -> Result<Response, AppError> {
         ),
         "calc.js" => (
             CALC_JS.as_bytes(),
+            "application/javascript; charset=utf-8",
+            "no-cache",
+        ),
+        "offline.js" => (
+            OFFLINE_JS.as_bytes(),
             "application/javascript; charset=utf-8",
             "no-cache",
         ),

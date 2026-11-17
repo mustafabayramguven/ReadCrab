@@ -166,6 +166,49 @@
     return n <= 1 ? 0 : i / (n - 1);
   }
 
+  // Metin çapası: bölümde okuma noktasından önceki boşluk dışı karakterlerin oranı.
+  // Boşluklar sayılmaz; böylece ekran genişliği, yazı boyutu ve satır kırılımı konumu değiştirmez.
+  function weigh(text) {
+    var s = String(text || '');
+    var n = 0;
+    for (var i = 0; i < s.length; i++) {
+      var c = s.charCodeAt(i);
+      if (!(c === 32 || (c >= 9 && c <= 13) || c === 160 || c === 0x2028 || c === 0x2029 || c === 0xfeff ||
+        (c >= 0x2000 && c <= 0x200a) || c === 0x202f || c === 0x205f || c === 0x3000 || c === 0x1680 || c === 0x85)) n++;
+    }
+    return n;
+  }
+
+  function isSpace(ch) {
+    return weigh(ch) === 0;
+  }
+
+  // {ch, p, t} biçimini çözer; t yoksa null (eski kayıtlar yalnız p taşır).
+  function parseTextLocator(s, totalChapters) {
+    var out = { ch: 0, p: 0, t: null };
+    try {
+      var o = JSON.parse(s);
+      if (!o || typeof o !== 'object') return out;
+      var ch = parseInt(o.ch, 10);
+      if (Number.isFinite(ch) && ch >= 0 && ch < totalChapters) out.ch = ch;
+      var p = Number(o.p);
+      out.p = Number.isFinite(p) ? Math.min(1, Math.max(0, p)) : 0;
+      if (o.t !== undefined && o.t !== null) {
+        var t = Number(o.t);
+        if (Number.isFinite(t)) out.t = Math.min(1, Math.max(0, t));
+      }
+    } catch (_) {}
+    return out;
+  }
+
+  function textLocator(ch, p, t) {
+    var o = { ch: ch, p: Number(Math.min(1, Math.max(0, p)).toFixed(6)) };
+    if (t !== null && t !== undefined && Number.isFinite(Number(t))) {
+      o.t = Number(Math.min(1, Math.max(0, Number(t))).toFixed(6));
+    }
+    return JSON.stringify(o);
+  }
+
   function formatEta(pace, overall) {
     if (pace === null || pace === undefined || !isFinite(pace) || overall >= 0.99) return '';
     var rem = pace * (1 - overall);
@@ -198,6 +241,10 @@
     pageCount: pageCount,
     pageFromRatio: pageFromRatio,
     ratioFromPage: ratioFromPage,
+    weigh: weigh,
+    isSpace: isSpace,
+    parseTextLocator: parseTextLocator,
+    textLocator: textLocator,
     formatEta: formatEta
   };
 

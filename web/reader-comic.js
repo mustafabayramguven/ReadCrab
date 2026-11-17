@@ -429,6 +429,19 @@
       pageImg.style.display = '';
     }
 
+    // Başka cihazdaki daha yeni sayfa: "Oraya git" önerisi.
+    var stopSync = ui.syncWatcher(book, {
+      describe: function (remote) {
+        return 'sayfa ' + ((parseInt(remote.locator, 10) || 0) + 1);
+      },
+      apply: function (remote) {
+        var n = parseInt(remote.locator, 10);
+        if (!Number.isFinite(n)) return;
+        if (curMode === 'vertical') scrollToPage(n);
+        else goToPage(n, true);
+      }
+    });
+
     function goToPage(idx, saveProg, force) {
       if (curMode !== 'page') return;
       var target = Math.max(0, Math.min(total - 1, idx));
@@ -806,6 +819,7 @@
 
     return function cleanup() {
       disposed = true;
+      stopSync();
       if (restoreTimer) clearTimeout(restoreTimer);
       if (hideTimer) clearTimeout(hideTimer);
       if (observer) observer.disconnect();

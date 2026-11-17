@@ -10,6 +10,7 @@ use crate::error::AppError;
 
 const MIGRATION_0001: &str = include_str!("migrations/0001_init.sql");
 const MIGRATION_0002: &str = include_str!("migrations/0002_iter2.sql");
+const MIGRATION_0003: &str = include_str!("migrations/0003_sync.sql");
 
 #[derive(Clone)]
 pub struct Db(Arc<Mutex<Connection>>);
@@ -38,6 +39,13 @@ impl Db {
             let tx = conn.transaction()?;
             tx.execute_batch(MIGRATION_0002)?;
             tx.pragma_update(None, "user_version", 2)?;
+            tx.commit()?;
+        }
+        let user_version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if user_version < 3 {
+            let tx = conn.transaction()?;
+            tx.execute_batch(MIGRATION_0003)?;
+            tx.pragma_update(None, "user_version", 3)?;
             tx.commit()?;
         }
 
