@@ -817,9 +817,9 @@
       dlNote,
       dlTrack
     ]);
-    dlShelf.hidden = true;
+    // Raf yalnız gösterilecekken DOM'a eklenir (boşken "Okumaya devam et" tek raf kalır).
     function renderDownloads() {
-      if (!KRS.offline || !active) return;
+      if (!KRS.offline || !active || !controls) return;
       var items = KRS.offline.list();
       var offline = navigator.onLine === false;
       clearNode(dlTrack);
@@ -839,7 +839,9 @@
         ? 'Çevrimdışısın. İndirdiğin kitapları okuyabilirsin; ilerlemen bağlantı gelince eşitlenir.'
         : '';
       dlNote.hidden = !offline;
-      dlShelf.hidden = !(items.length > 0 && state.q === '' && state.status === 'all') && !offline;
+      var show = (items.length > 0 && state.q === '' && state.status === 'all') || offline;
+      if (show && !dlShelf.parentNode) controls.insertBefore(dlShelf, shelf);
+      else if (!show && dlShelf.parentNode) dlShelf.parentNode.removeChild(dlShelf);
     }
     var stopDownloads = KRS.offline ? KRS.offline.onChange(renderDownloads) : function () {};
     window.addEventListener('online', renderDownloads);
@@ -847,7 +849,6 @@
 
     var controls = el('div', { className: 'library-controls' }, [
       searchBar,
-      dlShelf,
       shelf,
       el('div', { className: 'chip-row' }, [sortGroup, statusGroup])
     ]);

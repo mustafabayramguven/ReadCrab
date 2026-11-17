@@ -49,7 +49,8 @@ jobs:
 
   e2e:
     needs: image
-    runs-on: ubuntu-latest
+    # Playwright 1.55 Chromium'u ubuntu-latest (26.04) üzerinde desteklemiyor
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - run: test -f Cargo.lock

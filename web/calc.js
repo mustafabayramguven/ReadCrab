@@ -183,9 +183,11 @@
     return weigh(ch) === 0;
   }
 
-  // {ch, p, t} biçimini çözer; t yoksa null (eski kayıtlar yalnız p taşır).
+  // {ch, p, t, o} biçimini çözer; t yoksa null (eski kayıtlar yalnız p taşır).
+  // o: çapa karakterinin ekranın üstüne göre konumu, satır yüksekliği cinsinden (aynı cihazda
+  // piksel piksel aynı kaydırmayı verir).
   function parseTextLocator(s, totalChapters) {
-    var out = { ch: 0, p: 0, t: null };
+    var out = { ch: 0, p: 0, t: null, o: 0 };
     try {
       var o = JSON.parse(s);
       if (!o || typeof o !== 'object') return out;
@@ -197,14 +199,18 @@
         var t = Number(o.t);
         if (Number.isFinite(t)) out.t = Math.min(1, Math.max(0, t));
       }
+      var off = Number(o.o);
+      if (Number.isFinite(off)) out.o = Math.min(1, Math.max(-5, off));
     } catch (_) {}
     return out;
   }
 
-  function textLocator(ch, p, t) {
+  function textLocator(ch, p, t, off) {
     var o = { ch: ch, p: Number(Math.min(1, Math.max(0, p)).toFixed(6)) };
     if (t !== null && t !== undefined && Number.isFinite(Number(t))) {
       o.t = Number(Math.min(1, Math.max(0, Number(t))).toFixed(6));
+      var n = Number(off);
+      if (Number.isFinite(n) && n !== 0) o.o = Number(Math.min(1, Math.max(-5, n)).toFixed(3));
     }
     return JSON.stringify(o);
   }

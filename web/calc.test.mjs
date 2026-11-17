@@ -103,11 +103,12 @@ assert.equal(c.weigh(''), 0);
 assert.equal(c.weigh(null), 0);
 assert.equal(c.isSpace(' '), true);
 assert.equal(c.isSpace('ş'), false);
-assert.deepEqual(c.parseTextLocator('{"ch":3,"p":0.42}', 10), { ch: 3, p: 0.42, t: null });
-assert.deepEqual(c.parseTextLocator('{"ch":3,"p":0.42,"t":0.4}', 10), { ch: 3, p: 0.42, t: 0.4 });
-assert.deepEqual(c.parseTextLocator('{"ch":30,"p":2,"t":-1}', 10), { ch: 0, p: 1, t: 0 });
-assert.deepEqual(c.parseTextLocator('bozuk', 10), { ch: 0, p: 0, t: null });
+assert.deepEqual(c.parseTextLocator('{"ch":3,"p":0.42}', 10), { ch: 3, p: 0.42, t: null, o: 0 });
+assert.deepEqual(c.parseTextLocator('{"ch":3,"p":0.42,"t":0.4,"o":0.5}', 10), { ch: 3, p: 0.42, t: 0.4, o: 0.5 });
+assert.deepEqual(c.parseTextLocator('{"ch":30,"p":2,"t":-1,"o":-9}', 10), { ch: 0, p: 1, t: 0, o: -5 });
+assert.deepEqual(c.parseTextLocator('bozuk', 10), { ch: 0, p: 0, t: null, o: 0 });
 assert.equal(c.textLocator(2, 0.5, null), '{"ch":2,"p":0.5}');
 assert.equal(c.textLocator(2, 0.5, 0.1234567), '{"ch":2,"p":0.5,"t":0.123457}');
+assert.equal(c.textLocator(2, 0.5, 0.25, 0.4567), '{"ch":2,"p":0.5,"t":0.25,"o":0.457}');
 
 console.log('calc.test.mjs: tüm testler başarılı');

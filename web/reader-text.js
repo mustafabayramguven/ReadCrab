@@ -48,7 +48,12 @@
     var curRatio = 0;
     // Metin çapası (0..1, boşluk dışı karakter oranı). null: henüz ölçülmedi, curRatio kullanılır.
     var curT = null;
+    // çapa karakterinin ekran üstüne göre kayması (satır yüksekliği cinsinden)
+    var curO = 0;
     var anchorTimer = null;
+    // son yeniden düzendeki belge yüksekliği: görsel/yazı tipi yüklenince değişir
+    var laidOutHeight = -1;
+    var lastScrollTop = 0;
     var pageIdx = 0;
     var pageTotal = 1;
     var frameReady = false;
@@ -66,6 +71,7 @@
       curChapter = parsed.ch;
       curRatio = parsed.p;
       curT = parsed.t;
+      curO = parsed.o;
     }
 
     function isPaged() {
@@ -105,7 +111,7 @@
     var bookmarks = ui.bookmarkController(book, {
       getLocator: function () {
         measureAnchor();
-        return calc.textLocator(curChapter, curRatio, curT);
+        return calc.textLocator(curChapter, curRatio, curT, curO);
       },
       getLabel: function () {
         return 'Bölüm ' + (curChapter + 1) + ' · %' + Math.round(overallRatio() * 100);
@@ -216,7 +222,7 @@
       try {
         var loc = calc.parseTextLocator(bm.locator, totalChapters);
         navSheet.dialog.close();
-        gotoPosition(loc.ch, loc.p, loc.t);
+        gotoPosition(loc.ch, loc.p, loc.t, loc.o);
       } catch (_) {}
     });
     var TAB_TITLES = { toc: 'İçindekiler', marks: 'Yer imleri', search: 'Ara' };
@@ -348,11 +354,13 @@
       return out;
     }
 
-    function visibleRect(r, pw, ph) {
-      return r.width + r.height > 0 && r.right > 0 && r.left < pw && r.bottom > 0 && r.top < ph;
+    // dx: sayfa modunda mantıksal sayfanın görünüm penceresine göre kayması (yumuşak kaydırma
+    // sürerken bile hedef sayfa ölçülür)
+    function visibleRect(r, pw, ph, dx) {
+      return r.width + r.height > 0 && r.right > dx && r.left < dx + pw && r.bottom > 0 && r.top < ph;
     }
 
-    // Görünür alandaki ilk karakterin çapası.
+    // Görünür alandaki ilk karakterin çapası: {t, o}.
     function anchorAtViewport(doc) {
       var total = calc.weigh(doc && doc.body ? doc.body.textContent : '');
       if (!total) return null;
@@ -361,6 +369,8 @@
       var nodes = textNodesOf(doc);
       var range = doc.createRange();
       var before = 0;
+      var se = scrollEl(doc);
+      var dx = isPaged() && se ? pageIdx * pw - se.scrollLeft : 0;
       for (var i = 0; i < nodes.length; i++) {
         var node = nodes[i];
         var w = calc.weigh(node.data);
@@ -369,7 +379,7 @@
         var rects = range.getClientRects();
         var seen = false;
         for (var k = 0; k < rects.length; k++) {
-          if (visibleRect(rects[k], pw, ph)) {
+          if (visibleRect(rects[k], pw, ph, dx)) {
             seen = true;
             break;
           }
@@ -380,8 +390,10 @@
             if (calc.isSpace(node.data[j])) continue;
             range.setStart(node, j);
             range.setEnd(node, j + 1);
-            if (visibleRect(range.getBoundingClientRect(), pw, ph)) {
-              return clamp01((before + count) / total);
+            var cr = range.getBoundingClientRect();
+            if (visibleRect(cr, pw, ph, dx)) {
+              var off = !isPaged() && cr.height > 0 ? -cr.top / cr.height : 0;
+              return { t: clamp01((before + count) / total), o: Math.min(1, Math.max(-5, off)) };
             }
             count++;
           }
@@ -395,7 +407,8 @@
     function anchorRect(doc, t) {
       var total = calc.weigh(doc && doc.body ? doc.body.textContent : '');
       if (!total) return null;
-      var remaining = Math.min(total - 1, Math.floor(clamp01(t) * total));
+      // t 6 basamakla saklanır: en yakın karaktere yuvarlanır (floor bir önceki satıra düşebilir)
+      var remaining = Math.min(total - 1, Math.round(clamp01(t) * total));
       var nodes = textNodesOf(doc);
       var range = doc.createRange();
       for (var i = 0; i < nodes.length; i++) {
@@ -423,7 +436,9 @@
     function measureAnchor() {
       if (curT !== null || restoring || !frameReady) return;
       var doc = frameDoc();
-      if (doc) curT = anchorAtViewport(doc);
+      var a = doc ? anchorAtViewport(doc) : null;
+      curT = a ? a.t : null;
+      curO = a ? a.o : 0;
     }
 
     function flushAnchor() {
@@ -432,7 +447,7 @@
       anchorTimer = null;
       if (disposed || !frameReady || !KRS.tracker) return;
       measureAnchor();
-      KRS.tracker.scheduleProgress(book.id, calc.textLocator(curChapter, curRatio, curT), overallRatio());
+      KRS.tracker.scheduleProgress(book.id, calc.textLocator(curChapter, curRatio, curT, curO), overallRatio());
     }
 
     function persist() {
@@ -540,13 +555,23 @@
         pageIdx = 0;
         if (se) {
           var maxScroll = Math.max(0, se.scrollHeight - se.clientHeight);
-          if (anchor) {
-            se.scrollTop = Math.max(0, Math.min(maxScroll, Math.round(anchor.top + se.scrollTop - 2)));
+          if (curT === 0) {
+            // bölüm başı: üst boşluk dahil en başa
+            se.scrollTop = 0;
+            curRatio = 0;
+          } else if (anchor) {
+            // çapa karakteri, kaydedildiğindeki gibi ekranın üstüne hizalanır
+            var top = anchor.top + se.scrollTop + curO * anchor.height;
+            se.scrollTop = Math.max(0, Math.min(maxScroll, Math.round(top)));
             curRatio = maxScroll > 0 ? clamp01(se.scrollTop / maxScroll) : 0;
           } else {
             se.scrollTop = Math.round(curRatio * maxScroll);
           }
         }
+      }
+      if (se) {
+        laidOutHeight = se.scrollHeight;
+        lastScrollTop = se.scrollTop;
       }
       // kaydırma olayları eşzamansız gelir; kilit çift requestAnimationFrame sonrası açılır
       var gen = frameGen;
@@ -595,6 +620,7 @@
       pageIdx = i;
       curRatio = calc.ratioFromPage(i, pageTotal);
       curT = null;
+      curO = 0;
       var overall = updateProgressUi();
       if (KRS.tracker) KRS.tracker.addPage(curChapter + ':' + i);
       persist(overall);
@@ -649,7 +675,22 @@
       var ratio = maxScroll > 0 ? clamp01(se.scrollTop / maxScroll) : 0;
       // kesirli kaydırma/yakınlaştırmada 0.997'de kalmasın: alt uca varınca tam 1
       if (se.scrollTop + se.clientHeight >= se.scrollHeight - 2) ratio = 1;
-      if (Math.abs(ratio - curRatio) > 1e-6) curT = null;
+      // Üstteki görsel yüklenince tarayıcı kaydırmayı içerik büyüdüğü kadar kendisi kaydırır
+      // (scroll anchoring). Bu kullanıcı hareketi değildir: çapa korunur.
+      var grew = se.scrollHeight - laidOutHeight;
+      var moved = se.scrollTop - lastScrollTop;
+      var layoutShift = laidOutHeight >= 0 && grew !== 0 && Math.abs(moved - grew) <= 2;
+      laidOutHeight = se.scrollHeight;
+      lastScrollTop = se.scrollTop;
+      if (layoutShift) {
+        curRatio = ratio;
+        updateProgressUi();
+        return;
+      }
+      if (Math.abs(ratio - curRatio) > 1e-6) {
+        curT = null;
+        curO = 0;
+      }
       curRatio = ratio;
       var overall = updateProgressUi();
       var screenIdx = Math.floor(se.scrollTop / Math.max(1, se.clientHeight));
@@ -778,7 +819,7 @@
       iframe.style.display = '';
     }
 
-    function loadChapter(idx, targetRatio, saveProg, targetT) {
+    function loadChapter(idx, targetRatio, saveProg, targetT, targetO) {
       if (idx < 0 || idx >= totalChapters) return;
       flushAnchor();
       clearErrBox();
@@ -791,6 +832,7 @@
       curRatio = clamp01(targetRatio);
       // bölüm başı kesin bilinir; bölüm sonu (önceki bölüme dönüş) ölçülerek bulunur
       curT = targetT !== undefined && targetT !== null ? clamp01(targetT) : curRatio === 0 ? 0 : null;
+      curO = targetO !== undefined && targetO !== null ? targetO : 0;
       updateNavButtons();
       applyFrameStyles();
       updateProgressUi();
@@ -828,7 +870,7 @@
               text: 'Yeniden dene',
               onClick: function () {
                 clearErrBox();
-                loadChapter(curChapter, curRatio, saveProg, curT);
+                loadChapter(curChapter, curRatio, saveProg, curT, curO);
               }
             })
           ]);
@@ -858,16 +900,17 @@
     }
 
     // Aynı bölümdeyse çerçeve yeniden yüklenmeden konuma gider.
-    function gotoPosition(chIdx, p, t) {
+    function gotoPosition(chIdx, p, t, o) {
       var target = Math.max(0, Math.min(totalChapters - 1, chIdx));
       var anchor = t === undefined || t === null ? null : clamp01(t);
       if (target === curChapter && frameReady) {
         curRatio = clamp01(p);
         curT = anchor;
+        curO = o || 0;
         relayout();
         persist(overallRatio());
       } else {
-        loadChapter(target, p, true, anchor);
+        loadChapter(target, p, true, anchor, o || 0);
       }
     }
 
@@ -879,7 +922,7 @@
       },
       apply: function (remote) {
         var loc = calc.parseTextLocator(remote.locator, totalChapters);
-        gotoPosition(loc.ch, loc.p, loc.t);
+        gotoPosition(loc.ch, loc.p, loc.t, loc.o);
       }
     });
 
@@ -971,7 +1014,7 @@
       KRS.tracker.start(book.id, (curChapter + curRatio) / totalChapters);
     }
     applyFrameStyles();
-    loadChapter(curChapter, curRatio, false, curT);
+    loadChapter(curChapter, curRatio, false, curT, curO);
     scheduleHideBars();
 
     window.addEventListener('keydown', handleKey);
