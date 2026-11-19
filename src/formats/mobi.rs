@@ -3,7 +3,12 @@ use std::path::Path;
 use axum::body::Bytes;
 use mobi::{headers::Encryption, Mobi};
 
-use crate::formats::FormatError;
+use crate::formats::{FormatError, MAX_ENTRIES, MAX_ENTRY_BYTES};
+
+/// Dosya bütünüyle belleğe okunur; görseller de bellekte tutulur.
+const MAX_MOBI_FILE_BYTES: u64 = 256 * 1024 * 1024;
+/// Açılmış metin (PalmDOC ~5 kat, HuffCDIC sınırsız açılabilir).
+const MAX_MOBI_TEXT_BYTES: usize = MAX_ENTRY_BYTES as usize;
 
 #[derive(Clone, Debug)]
 pub struct MobiBook {
@@ -13,19 +18,38 @@ pub struct MobiBook {
 }
 
 pub fn mobi_open(path: &Path) -> Result<MobiBook, FormatError> {
+    let size = std::fs::metadata(path)
+        .map_err(|_| FormatError::Corrupt)?
+        .len();
+    if size > MAX_MOBI_FILE_BYTES {
+        return Err(FormatError::TooLarge);
+    }
     let m = Mobi::from_path(path).map_err(|_| FormatError::Corrupt)?;
     if m.encryption() != Encryption::No {
         return Err(FormatError::Drm);
     }
+    // başlıktaki beyan açmadan önce; gerçek boyut açtıktan sonra denetlenir
+    if m.metadata.palmdoc.text_length as usize > MAX_MOBI_TEXT_BYTES {
+        return Err(FormatError::TooLarge);
+    }
 
     let raw = m.content_as_string_lossy();
+    if raw.len() > MAX_MOBI_TEXT_BYTES {
+        return Err(FormatError::TooLarge);
+    }
     let chapters = split_mobi_chapters(&raw);
     if chapters.is_empty() {
         return Err(FormatError::Corrupt);
     }
+    if chapters.len() > MAX_ENTRIES {
+        return Err(FormatError::TooLarge);
+    }
 
-    let images: Vec<Bytes> = m
-        .image_records()
+    let records = m.image_records();
+    if records.len() > MAX_ENTRIES {
+        return Err(FormatError::TooLarge);
+    }
+    let images: Vec<Bytes> = records
         .into_iter()
         .map(|r| Bytes::from(r.content.to_vec()))
         .collect();

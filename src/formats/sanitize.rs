@@ -160,30 +160,36 @@ const RAW_TEXT_TAGS: [&str; 9] = [
     "title", "script", "style", "textarea", "iframe", "noscript", "xmp", "noembed", "noframes",
 ];
 
-// HTML5 ayrıştırıcı `<title/>` sonundaki '/' işaretini yok sayar, belgenin kalanını yutar
+// HTML5 ayrıştırıcı `<title/>` sonundaki '/' işaretini yok sayar, belgenin kalanını yutar.
+// Doğrusal: '<'dan sonra ilk '<' ya da '>'ya dek bakılır, her bayt bir kez taranır. (Eskiden
+// her '<' için ilk '>'ya kadar taranıp 1 bayt ilerleniyordu: "<<<…<>" girdisinde O(N²).)
 fn strip_self_closing_raw_text(html: &str) -> String {
     let mut out = String::with_capacity(html.len());
     let mut rest = html;
     while let Some(pos) = rest.find('<') {
         out.push_str(&rest[..pos]);
         let after = &rest[pos..];
-        let Some(end) = after.find('>') else {
+        let Some(stop) = after[1..].find(|c| c == '<' || c == '>').map(|i| i + 1) else {
             out.push_str(after);
             return out;
         };
-        let inner = &after[1..end];
+        if after.as_bytes()[stop] == b'<' {
+            // kapanmamış '<': bir etiket değil, metin olarak kalır
+            out.push_str(&after[..stop]);
+            rest = &after[stop..];
+            continue;
+        }
+        let inner = &after[1..stop];
         let name_len = inner
             .bytes()
             .take_while(|b| b.is_ascii_alphanumeric())
             .count();
         let name = &inner[..name_len];
         let raw = RAW_TEXT_TAGS.iter().any(|t| name.eq_ignore_ascii_case(t));
-        if raw && inner.ends_with('/') {
-            rest = &after[end + 1..];
-        } else {
-            out.push('<');
-            rest = &after[1..];
+        if !(raw && inner.ends_with('/')) {
+            out.push_str(&after[..=stop]);
         }
+        rest = &after[stop + 1..];
     }
     out.push_str(rest);
     out
@@ -303,5 +309,28 @@ mod tests {
         let out = sanitize_chapter(html, 1, "", SrcMode::Epub);
         assert!(!out.contains("Gizli"));
         assert!(out.contains("Merhaba"));
+    }
+
+    #[test]
+    fn strip_self_closing_keeps_text_and_tags() {
+        assert_eq!(
+            strip_self_closing_raw_text("a<title/>b<p>c</p><Script x=\"1\"/>d"),
+            "ab<p>c</p>d"
+        );
+        assert_eq!(strip_self_closing_raw_text("1 < 2 <b>x</b>"), "1 < 2 <b>x</b>");
+        assert_eq!(strip_self_closing_raw_text("x<a <title/>y"), "x<a y");
+        assert_eq!(strip_self_closing_raw_text("son <"), "son <");
+        assert_eq!(strip_self_closing_raw_text("<<"), "<<");
+    }
+
+    #[test]
+    fn strip_self_closing_is_linear() {
+        // eski sürüm bu girdide O(N²) idi (8 MiB'ta saatler); şimdi anında biter
+        let mut html = "<".repeat(2_000_000);
+        html.push('>');
+        let t = std::time::Instant::now();
+        let out = strip_self_closing_raw_text(&html);
+        assert_eq!(out.len(), html.len());
+        assert!(t.elapsed() < std::time::Duration::from_secs(5), "{:?}", t.elapsed());
     }
 }

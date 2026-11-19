@@ -280,12 +280,16 @@ impl Http {
     }
 }
 
+/// Sınırı aşan yanıt kırpılıp tam sanılmaz (yarım bölüm/sayfa diske "tamam" diye yazılırdı).
 fn read_all(resp: ureq::Response, cap: u64) -> Result<Vec<u8>, HErr> {
     let mut buf = Vec::new();
     resp.into_reader()
-        .take(cap)
+        .take(cap.saturating_add(1))
         .read_to_end(&mut buf)
         .map_err(|e| HErr::Net(e.to_string()))?;
+    if buf.len() as u64 > cap {
+        return Err(HErr::Parse("yanıt boyut sınırını aşıyor".to_string()));
+    }
     Ok(buf)
 }
 
@@ -317,6 +321,12 @@ pub fn parse_session_cookie(headers: &[&str]) -> Option<String> {
 /// http/https değilse `InvalidInput`. (Düz http'nin yalnız yerel ağa gitmesi `LocalOnlyResolver`'dadır.)
 pub fn normalize_url(s: &str) -> Result<String, CoreError> {
     let t = s.trim();
+    // kullanıcı bilgisi (user:parola@), sorgu ve parça taban adreste anlamsız/tehlikeli
+    if t.contains(['@', '?', '#', '\\']) || t.contains(char::is_whitespace) {
+        return Err(CoreError::InvalidInput(
+            "Sunucu adresi geçersiz karakter içeriyor.".to_string(),
+        ));
+    }
     let (scheme, rest) = match t.split_once("://") {
         Some((sc, r)) => (sc.to_ascii_lowercase(), r),
         None => ("http".to_string(), t),
@@ -519,6 +529,21 @@ mod tests {
             normalize_url("ftp://ornek.org"),
             Err(CoreError::InvalidInput(_))
         ));
+        for bad in [
+            "http://u:p@ornek.org",
+            "https://ornek.org/?x=1",
+            "https://ornek.org/#a",
+            "https://orn ek.org",
+        ] {
+            assert!(
+                matches!(normalize_url(bad), Err(CoreError::InvalidInput(_))),
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            normalize_url("https://ornek.org:8443/readcrab/").unwrap(),
+            "https://ornek.org:8443/readcrab"
+        );
     }
 
     #[test]

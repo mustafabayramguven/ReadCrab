@@ -249,6 +249,8 @@ pub(crate) fn remove_book_dirs(root: &Path, ids: &[i64]) {
     }
 }
 
+const MAX_SERIES: usize = 50_000;
+
 /// Sunucu kütüphanesini yerele yansıtır. Sunucu ilerlemesi uygulanan kitap sayısını döner.
 pub(crate) fn refresh(core: &Core) -> Result<i32, CoreError> {
     // 1. seri listesi
@@ -260,7 +262,8 @@ pub(crate) fn refresh(core: &Core) -> Result<i32, CoreError> {
         let got = page.items.len();
         total = page.total;
         items.extend(page.items);
-        if got == 0 || items.len() as i64 >= total {
+        // üst sınır: hep dolu sayfa dönen bir sunucu sonsuz döngü/bellek tüketimi yaratamaz
+        if got == 0 || items.len() as i64 >= total || items.len() >= MAX_SERIES {
             break;
         }
     }

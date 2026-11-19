@@ -15,6 +15,8 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
     conn.busy_timeout(Duration::from_millis(5000))?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "foreign_keys", "OFF")?;
+    // silinen satırlar (çıkışta oturum belirteci dahil) dosyada kalıntı bırakmasın
+    conn.pragma_update(None, "secure_delete", "ON")?;
 
     let user_version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
     if user_version < 1 {
@@ -66,7 +68,10 @@ pub fn wipe_all(conn: &Connection) -> rusqlite::Result<()> {
          DELETE FROM downloads;
          DELETE FROM parts;",
     )?;
-    tx.commit()
+    tx.commit()?;
+    // WAL'deki eski sayfalar (belirteç dahil) ana dosyaya yazılıp WAL sıfırlanır; en iyi çaba
+    let _ = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
+    Ok(())
 }
 
 #[cfg(test)]
@@ -101,6 +106,14 @@ mod tests {
             .unwrap();
         wipe_all(&conn).unwrap();
         assert_eq!(kv_get(&conn, "token"), None);
+        let sd: i64 = conn
+            .pragma_query_value(None, "secure_delete", |r| r.get(0))
+            .unwrap();
+        assert_eq!(sd, 1);
+        let wal = std::fs::metadata(dir.path().join("t.db-wal"))
+            .map(|m| m.len())
+            .unwrap_or(0);
+        assert_eq!(wal, 0, "WAL çıkıştan sonra sıfırlanmalı");
         let n: i64 = conn
             .query_row("SELECT COUNT(*) FROM series", [], |r| r.get(0))
             .unwrap();

@@ -394,6 +394,7 @@ pub async fn test_app_with_secure(cookie_secure: bool) -> (Router, TempDirs) {
         data_dir: data_dir.path().to_path_buf(),
         books_dir: books_dir.path().to_path_buf(),
         cookie_secure,
+        trusted_proxies: Vec::new(),
     };
     let state = AppState {
         db: db.clone(),

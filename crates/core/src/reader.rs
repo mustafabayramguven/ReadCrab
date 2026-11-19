@@ -185,14 +185,18 @@ pub(crate) fn fetch_chapter(core: &Core, book_id: i64, n: i32) -> Result<i64, PE
     Ok(total)
 }
 
+/// Bir kitabın en çok parça (sayfa/bölüm) sayısı; sunucudaki `MAX_ENTRIES` ile aynı.
+pub(crate) const MAX_PARTS: i64 = 20_000;
+
 pub(crate) fn chapter_count(page_count: i64, toc_len: usize) -> i32 {
-    if page_count > 0 {
-        page_count as i32
+    let n = if page_count > 0 {
+        page_count
     } else if toc_len > 0 {
-        toc_len as i32
+        toc_len as i64
     } else {
         1
-    }
+    };
+    n.min(MAX_PARTS) as i32
 }
 
 fn load_toc(core: &Core, book_id: i64) -> Result<Vec<TocEntry>, CoreError> {
@@ -354,6 +358,7 @@ mod tests {
         assert_eq!(chapter_count(5, 9), 5);
         assert_eq!(chapter_count(0, 9), 9);
         assert_eq!(chapter_count(0, 0), 1);
+        assert_eq!(chapter_count(1_000_000_000, 0), MAX_PARTS as i32);
     }
 
     #[test]

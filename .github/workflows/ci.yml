@@ -53,7 +53,8 @@ jobs:
 
   e2e:
     needs: image
-    runs-on: ubuntu-latest
+    # Playwright 1.55 ubuntu 26.04'te chromium kuramıyor (ubuntu-latest 26.04'e geçti)
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:

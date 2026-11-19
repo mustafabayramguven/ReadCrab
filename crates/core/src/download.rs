@@ -150,6 +150,10 @@ fn download_book(core: &Core, id: i64) -> Result<Outcome, CoreError> {
     if total <= 0 {
         return Err(CoreError::Server("İndirilecek içerik yok.".to_string()));
     }
+    // sunucunun bildirdiği sayı belleğe/diske sınırsız iş açmasın
+    if total > reader::MAX_PARTS {
+        return Err(CoreError::Server("Geçersiz sayfa/bölüm sayısı.".to_string()));
+    }
     if !core.root.join("covers").join(format!("{id}-{cover_v}.jpg")).exists() {
         let _ = reader::fetch_cover(core, id, cover_v); // hata yutulur
     }

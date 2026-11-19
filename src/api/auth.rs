@@ -13,9 +13,9 @@ use serde::{Deserialize, Serialize};
 use crate::{
     app::AppState,
     auth::{
-        build_session_cookie, extract_session_token, hash_password, new_session_token, token_hash,
-        unix_now, validate_password, validate_username, verify_password, AuthUser, DUMMY_HASH,
-        SESSION_TTL_SECS,
+        build_session_cookie, client_ip, extract_session_token, hash_password, new_session_token,
+        token_hash, unix_now, validate_password, validate_username, verify_password, AuthUser,
+        DUMMY_HASH, SESSION_TTL_SECS,
     },
     error::{AppError, JsonBody},
 };
@@ -129,13 +129,15 @@ async fn setup(
 async fn login(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(state): State<AppState>,
+    headers: HeaderMap,
     JsonBody(req): JsonBody<CredentialsReq>,
 ) -> Result<Response, AppError> {
     if req.username.chars().count() > 32 || req.password.chars().count() > 128 {
         return Err(AppError::Unauthorized);
     }
 
-    if let Err(retry_after) = state.limiter.reserve(&req.username, addr.ip()) {
+    let ip = client_ip(addr.ip(), &headers, &state.cfg.trusted_proxies);
+    if let Err(retry_after) = state.limiter.reserve(&req.username, ip) {
         return Err(AppError::TooManyAttempts { retry_after });
     }
 
@@ -162,7 +164,7 @@ async fn login(
         return Err(AppError::Unauthorized);
     }
 
-    state.limiter.ok(&req.username, addr.ip());
+    state.limiter.ok(&req.username, ip);
 
     let token = new_session_token();
     let thash = token_hash(&token);
@@ -237,7 +239,8 @@ async fn change_password(
 ) -> Result<StatusCode, AppError> {
     validate_password(&req.new_password)?;
 
-    if let Err(retry_after) = state.limiter.reserve(&user.username, addr.ip()) {
+    let ip = client_ip(addr.ip(), &headers, &state.cfg.trusted_proxies);
+    if let Err(retry_after) = state.limiter.reserve(&user.username, ip) {
         return Err(AppError::TooManyAttempts { retry_after });
     }
 
@@ -258,7 +261,7 @@ async fn change_password(
         return Err(AppError::Unauthorized);
     }
 
-    state.limiter.ok(&user.username, addr.ip());
+    state.limiter.ok(&user.username, ip);
 
     let new_hash = hash_password(req.new_password).await?;
     let current_thash = extract_session_token(&headers)
