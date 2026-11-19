@@ -1,5 +1,6 @@
 use std::{
     io::Read,
+    net::{IpAddr, SocketAddr, ToSocketAddrs},
     sync::{
         atomic::{AtomicI64, Ordering},
         Mutex, MutexGuard,
@@ -14,6 +15,57 @@ use crate::{error::CoreError, util};
 
 const MAX_BODY: u64 = 64 * 1024 * 1024;
 const COOKIE_NAME: &str = "krs_session";
+
+/// Şifrelenmemiş istek yerel olmayan bir adrese gidecekken çözümleyicinin döndürdüğü hata metni.
+pub(crate) const PLAINTEXT_BLOCKED: &str =
+    "şifrelenmemiş (http) bağlantı yalnız yerel ağ adreslerine kurulur";
+
+/// Düz HTTP'nin gidebileceği adres: loopback, özel ağ (RFC 1918, IPv6 ULA), link-local ve
+/// 100.64.0.0/10 (CGNAT; Tailscale gibi kendi şifrelemesi olan VPN'ler bu aralığı kullanır).
+pub fn is_local_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            let o = v4.octets();
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || (o[0] == 100 && (o[1] & 0xC0) == 64)
+        }
+        IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_local_ip(IpAddr::V4(v4));
+            }
+            let s0 = v6.segments()[0];
+            v6.is_loopback() || (s0 & 0xFE00) == 0xFC00 || (s0 & 0xFFC0) == 0xFE80
+        }
+    }
+}
+
+/// Düz HTTP ajanının çözümleyicisi: ad yalnız yerel adreslere bağlanır. Rust ağ katmanı
+/// Android'in cleartext politikasını görmez; bu süzgeç olmadan parola ve oturum çerezi
+/// internete açık metin gidebilirdi. Denetim her bağlantıda (yönlendirmeler dahil) yapılır.
+struct LocalOnlyResolver;
+
+impl ureq::Resolver for LocalOnlyResolver {
+    fn resolve(&self, netloc: &str) -> std::io::Result<Vec<SocketAddr>> {
+        let addrs: Vec<SocketAddr> = netloc
+            .to_socket_addrs()?
+            .filter(|a| is_local_ip(a.ip()))
+            .collect();
+        if addrs.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                PLAINTEXT_BLOCKED,
+            ));
+        }
+        Ok(addrs)
+    }
+}
+
+fn is_https(base: &str) -> bool {
+    base.get(..8)
+        .is_some_and(|s| s.eq_ignore_ascii_case("https://"))
+}
 
 /// İç HTTP hatası (UniFFI'ye açılmaz; `error::into_core` ile çevrilir).
 #[derive(Debug)]
@@ -49,25 +101,31 @@ fn no_session() -> HErr {
 }
 
 pub struct Http {
-    agent: ureq::Agent,
+    /// `https://` tabanı: genel çözümleyici; https'ten http'ye yönlendirme reddedilir.
+    tls: ureq::Agent,
+    /// `http://` tabanı: yalnız yerel adreslere bağlanır.
+    plain: ureq::Agent,
     base: Mutex<String>,
     token: Mutex<Option<String>>,
     offset: AtomicI64,
 }
 
+fn agent_builder() -> ureq::AgentBuilder {
+    // Bağlantı havuzu kapalı: ureq havuza dönen akışın okuma zaman aşımını sıfırlar (Stream::reset)
+    // ve yeniden kullanımda geri koymaz; yanıt vermeyen (yarı ölü) bir akışta istek sonsuza dek asılırdı.
+    ureq::AgentBuilder::new()
+        .max_idle_connections(0)
+        .timeout_connect(Duration::from_secs(8))
+        .timeout_read(Duration::from_secs(30))
+        .timeout_write(Duration::from_secs(30))
+        .user_agent("ReadCrab-Android/0.1")
+}
+
 impl Http {
     pub fn new() -> Http {
-        // Bağlantı havuzu kapalı: ureq havuza dönen akışın okuma zaman aşımını sıfırlar (Stream::reset)
-        // ve yeniden kullanımda geri koymaz; yanıt vermeyen (yarı ölü) bir akışta istek sonsuza dek asılırdı.
-        let agent = ureq::AgentBuilder::new()
-            .max_idle_connections(0)
-            .timeout_connect(Duration::from_secs(8))
-            .timeout_read(Duration::from_secs(30))
-            .timeout_write(Duration::from_secs(30))
-            .user_agent("ReadCrab-Android/0.1")
-            .build();
         Http {
-            agent,
+            tls: agent_builder().https_only(true).build(),
+            plain: agent_builder().resolver(LocalOnlyResolver).build(),
             base: Mutex::new(String::new()),
             token: Mutex::new(None),
             offset: AtomicI64::new(0),
@@ -120,7 +178,12 @@ impl Http {
             return Err(no_session());
         }
         let url = format!("{base}{path}");
-        let mut req = self.agent.request(method, &url);
+        let agent = if is_https(&base) {
+            &self.tls
+        } else {
+            &self.plain
+        };
+        let mut req = agent.request(method, &url);
         if let Some(t) = total {
             req = req.timeout(t);
         }
@@ -250,20 +313,24 @@ pub fn parse_session_cookie(headers: &[&str]) -> Option<String> {
     None
 }
 
-/// Kırp, `://` yoksa `http://` ekle, sondaki `/` kırp; boşsa `InvalidInput`.
+/// Kırp, `://` yoksa `http://` ekle, şemayı küçült, sondaki `/` kırp; boşsa ya da şema
+/// http/https değilse `InvalidInput`. (Düz http'nin yalnız yerel ağa gitmesi `LocalOnlyResolver`'dadır.)
 pub fn normalize_url(s: &str) -> Result<String, CoreError> {
     let t = s.trim();
-    let with_scheme = if t.contains("://") {
-        t.to_string()
-    } else {
-        format!("http://{t}")
+    let (scheme, rest) = match t.split_once("://") {
+        Some((sc, r)) => (sc.to_ascii_lowercase(), r),
+        None => ("http".to_string(), t),
     };
-    let out = with_scheme.trim_end_matches('/').to_string();
-    let host = out.split_once("://").map(|(_, h)| h).unwrap_or("");
-    if t.is_empty() || host.is_empty() {
+    if scheme != "http" && scheme != "https" {
+        return Err(CoreError::InvalidInput(
+            "Sunucu adresi http:// ya da https:// ile başlamalıdır.".to_string(),
+        ));
+    }
+    let host = rest.trim_end_matches('/');
+    if host.is_empty() {
         return Err(CoreError::InvalidInput("Sunucu adresi gerekli.".to_string()));
     }
-    Ok(out)
+    Ok(format!("{scheme}://{host}"))
 }
 
 /// Sorgu değeri için yüzde-kodlama.
@@ -440,6 +507,73 @@ mod tests {
         assert!(matches!(normalize_url(""), Err(CoreError::InvalidInput(_))));
         assert!(matches!(normalize_url("   "), Err(CoreError::InvalidInput(_))));
         assert!(matches!(normalize_url("http://"), Err(CoreError::InvalidInput(_))));
+        assert_eq!(
+            normalize_url("HTTPS://Ornek.org").unwrap(),
+            "https://Ornek.org"
+        );
+        assert!(matches!(
+            normalize_url("file:///data/x"),
+            Err(CoreError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            normalize_url("ftp://ornek.org"),
+            Err(CoreError::InvalidInput(_))
+        ));
+    }
+
+    #[test]
+    fn local_ip_classification() {
+        let local = [
+            "127.0.0.1",
+            "10.0.2.2",
+            "172.16.5.4",
+            "192.168.1.10",
+            "169.254.1.1",
+            "100.64.0.1",
+            "100.127.255.254",
+            "::1",
+            "fd12:3456::1",
+            "fe80::1",
+            "::ffff:192.168.1.10",
+        ];
+        for s in local {
+            assert!(is_local_ip(s.parse().unwrap()), "{s} yerel olmalı");
+        }
+        let public = [
+            "8.8.8.8",
+            "172.32.0.1",
+            "100.128.0.1",
+            "1.1.1.1",
+            "2001:4860::8888",
+            "::ffff:8.8.8.8",
+        ];
+        for s in public {
+            assert!(!is_local_ip(s.parse().unwrap()), "{s} yerel olmamalı");
+        }
+    }
+
+    #[test]
+    fn plaintext_resolver_refuses_public_addresses() {
+        use ureq::Resolver;
+        let err = LocalOnlyResolver.resolve("8.8.8.8:80").unwrap_err();
+        assert!(err.to_string().contains(PLAINTEXT_BLOCKED));
+        assert_eq!(
+            LocalOnlyResolver.resolve("127.0.0.1:3435").unwrap(),
+            vec!["127.0.0.1:3435".parse::<SocketAddr>().unwrap()]
+        );
+    }
+
+    #[test]
+    fn plaintext_login_to_public_ip_never_connects() {
+        // genel IP'ye http: bağlantı kurulmadan (parola gönderilmeden) reddedilir
+        let h = Http::new();
+        match h.login("http://203.0.113.7:3435", "u", "parola123") {
+            Err(HErr::Net(m)) => assert!(m.contains(PLAINTEXT_BLOCKED), "{m}"),
+            Err(e) => panic!("Net bekleniyordu: {e:?}"),
+            Ok(_) => panic!("giriş reddedilmeliydi"),
+        }
+        assert!(is_https("HTTPS://ornek.org"));
+        assert!(!is_https("http://ornek.org"));
     }
 
     #[test]

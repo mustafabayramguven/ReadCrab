@@ -363,7 +363,17 @@ impl Core {
         let (res, token) = self
             .http
             .login(&base, &username, &password)
-            .map_err(into_core)?;
+            .map_err(|e| match e {
+                http::HErr::Net(m) if m.contains(http::PLAINTEXT_BLOCKED) => {
+                    CoreError::InvalidInput(
+                        "Bu sunucu yerel ağda değil. Parola ve oturum internette şifresiz gitmesin \
+                         diye http:// yalnız yerel ağ adreslerinde kullanılabilir; sunucu için \
+                         https:// adresini girin."
+                            .to_string(),
+                    )
+                }
+                e => into_core(e),
+            })?;
         let (prev_url, prev_uid) = self.with_db(|c| {
             Ok((db::kv_get(c, "server_url"), db::kv_get(c, "user_id")))
         })?;
@@ -421,5 +431,18 @@ mod tests {
         assert_eq!(core.http.clock_offset(), 42);
         let skew = core.now() - util::sys_now();
         assert!((41..=43).contains(&skew));
+    }
+
+    #[test]
+    fn plaintext_login_outside_local_network_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = Core::new(dir.path().to_string_lossy().to_string()).unwrap();
+        let r = core.login(
+            "203.0.113.7:3435".to_string(),
+            "u".to_string(),
+            "parola123".to_string(),
+        );
+        assert!(matches!(r, Err(CoreError::InvalidInput(_))), "{r:?}");
+        assert!(core.session().is_none());
     }
 }

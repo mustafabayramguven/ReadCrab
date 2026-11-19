@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.view.View
 import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.runtime.Composable
@@ -19,6 +20,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.webkit.WebViewAssetLoader
 import kotlinx.coroutines.flow.Flow
 import org.json.JSONObject
+import java.io.ByteArrayInputStream
 import java.io.File
 
 sealed interface WebCommand {
@@ -62,7 +64,10 @@ fun ReaderWebView(
                 isHorizontalScrollBarEnabled = false
                 overScrollMode = View.OVER_SCROLL_NEVER
                 webViewClient = object : WebViewClient() {
-                    override fun shouldInterceptRequest(v: WebView, r: WebResourceRequest) = loader.shouldInterceptRequest(r.url)
+                    // yerel varlık değilse ağa çıkılmaz (CSP'ye ek savunma: bölüm HTML'i sunucudan gelir)
+                    override fun shouldInterceptRequest(v: WebView, r: WebResourceRequest): WebResourceResponse =
+                        loader.shouldInterceptRequest(r.url)
+                            ?: WebResourceResponse("text/plain", "utf-8", 403, "Forbidden", emptyMap(), ByteArrayInputStream(ByteArray(0)))
                     override fun shouldOverrideUrlLoading(v: WebView, r: WebResourceRequest) = true // dış gezinme yok
                 }
                 addJavascriptInterface(object { @JavascriptInterface fun post(json: String) = onMessage(json) }, "Android")

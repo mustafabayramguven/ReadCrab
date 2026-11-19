@@ -19,7 +19,7 @@
     <string name="login_show_password">Parolayı göster</string>
     <string name="login_error_credentials">Kullanıcı adı veya parola hatalı.</string>
     <string name="login_error_network">Sunucuya ulaşılamadı. Adresi ve bağlantıyı denetleyin.</string>
-    <string name="login_error_tls">Güvenli bağlantı kurulamadı: sunucunun sertifikası doğrulanamadı. Özel CA veya kendi imzalı sertifikalar desteklenmez; genel bir CA sertifikası (ör. Let\'s Encrypt) ya da http:// adresi kullanın.</string>
+    <string name="login_error_tls">Güvenli bağlantı kurulamadı: sunucunun sertifikası doğrulanamadı. Özel CA veya kendi imzalı sertifikalar desteklenmez; genel bir CA sertifikası (ör. Let\'s Encrypt) kullanın. http:// yalnız yerel ağdaki sunucularda kullanılabilir.</string>
     <string name="login_relogin">Oturumunuzun süresi doldu. Yeniden giriş yapın.</string>
     <string name="library_title">Kütüphane</string>
     <string name="library_continue">Okumaya devam</string>
