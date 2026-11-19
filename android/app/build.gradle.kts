@@ -58,8 +58,10 @@ val syncWebAssets by tasks.registering(Sync::class) {
     }
     into(layout.buildDirectory.dir("webAssets"))
 }
-tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }
-    .configureEach { dependsOn(syncWebAssets) }
+// webAssets'i okuyan her görev (merge*Assets ve release'deki lint model/analiz görevleri) önce kopyayı beklesin
+tasks.matching {
+    (it.name.startsWith("merge") && it.name.endsWith("Assets")) || it.name.contains("lint", ignoreCase = true)
+}.configureEach { dependsOn(syncWebAssets) }
 
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2025.05.01"))
