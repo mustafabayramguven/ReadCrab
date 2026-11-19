@@ -312,43 +312,60 @@ test('okuyucu uçtan uca', async ({ page }) => {
   });
   expect(targetScroll).toBeGreaterThan(20);
 
-  await expect
-    .poll(
-      async () => {
-        const r = await page.request.get(`/api/books/${sharedEpubId}/progress`);
-        const j = await r.json();
-        if (!j.locator) return 0;
-        try {
-          return JSON.parse(j.locator).p || 0;
-        } catch {
-          return 0;
-        }
-      },
-      { timeout: 15000 }
-    )
-    .toBeGreaterThan(0);
+  // konum satır başına sabitlenir: locator'da "c" (bölümde satır başından önceki anlamlı karakter)
+  const savedLoc = async () => {
+    const r = await page.request.get(`/api/books/${sharedEpubId}/progress`);
+    const j = await r.json();
+    try {
+      return JSON.parse(j.locator || '{}');
+    } catch {
+      return {};
+    }
+  };
+  await expect.poll(async () => (await savedLoc()).p || 0, { timeout: 15000 }).toBeGreaterThan(0);
+  await expect.poll(async () => (await savedLoc()).c || 0, { timeout: 15000 }).toBeGreaterThan(0);
+  const saved = await savedLoc();
+  // kaydedilen, ekranda tam görünen ilk satırın başı
+  const topNow = () =>
+    page.evaluate(() => {
+      const doc = document.querySelector('iframe.reader-frame').contentDocument;
+      return window.KRS_ANCHOR.topUnit(window.KRS_ANCHOR.index(doc));
+    });
+  expect(saved.c).toBe(await topNow());
 
   await page.reload();
   await expect(page.frameLocator('iframe.reader-frame').locator('h1')).toContainText(
     'Birinci Bölüm'
   );
 
-  await expect
-    .poll(
-      async () => {
-        const cur = await page
-          .frameLocator('iframe.reader-frame')
-          .locator('html')
-          .evaluate(() => {
-            const se =
-              document.scrollingElement || document.documentElement || document.body;
-            return se.scrollTop;
-          });
-        return Math.abs(cur - targetScroll) <= 5;
-      },
-      { timeout: 10000 }
-    )
-    .toBe(true);
+  // "kaldığın yer" belirteci kaydedilen satır başında; açılışta üst çubuğun altında görünür
+  const pin = page.frameLocator('iframe.reader-frame').locator('.rc-pin');
+  await expect(pin).toHaveCount(1);
+  const pinInfo = await page.evaluate(() => {
+    const frame = document.querySelector('iframe.reader-frame');
+    const doc = frame.contentDocument;
+    const el = doc.querySelector('.rc-pin');
+    const ix = window.KRS_ANCHOR.index(doc);
+    // belirteçten sonraki ilk birim
+    const i = ix.items.findIndex(
+      (n) => el.compareDocumentPosition(n) & Node.DOCUMENT_POSITION_FOLLOWING
+    );
+    const bar = document.querySelector('.reader-bar.top').getBoundingClientRect();
+    const top = frame.getBoundingClientRect().top + el.getBoundingClientRect().top;
+    return { unit: i < 0 ? -1 : ix.starts[i], top, barBottom: bar.bottom };
+  });
+  expect(pinInfo.unit).toBe(saved.c);
+  // çubuk görünürken altında; 3 sn sonra gizlenince de ekranın üst kısmında
+  expect(pinInfo.top).toBeGreaterThanOrEqual(pinInfo.barBottom - 1);
+  expect(pinInfo.top).toBeLessThan(150);
+  const restoredScroll = await page
+    .frameLocator('iframe.reader-frame')
+    .locator('html')
+    .evaluate(() => (document.scrollingElement || document.documentElement).scrollTop);
+  expect(Math.abs(restoredScroll - targetScroll)).toBeLessThanOrEqual(150);
+  // açılış kaydırması konumu değiştirmez (yalnız kullanıcı hareketi kaydedilir)
+  await page.waitForTimeout(1500);
+  expect((await savedLoc()).c).toBe(saved.c);
 
   // Son bölümde "Sonraki bölüm" disabled olmalı (Madde 18)
   await page.mouse.move(120, 120);

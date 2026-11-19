@@ -4,9 +4,11 @@ on:
   push:
     paths:
       - "crates/**"
+      - "!crates/tui/**"
       - "android/**"
       - "web/fonts/**"
       - "web/frame.css"
+      - "web/anchor.js"
       - "web/reader-fonts.css"
       - "web/favicon.svg"
       - "Cargo.toml"

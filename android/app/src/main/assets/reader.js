@@ -17,6 +17,9 @@
   var ch = 0, ratio = 0, anchor = -1, pageIdx = 0, pageTotal = 1, blocks = [];
   var ready = false, restoring = false, deferred = false, lastScrollAt = 0;
   var lastBlock = -2, sentEnd = false, relT = null, down = null;
+  // anc: satır başı (locator c, bkz. anchor.js); konumun asıl kaynağı. anchor (b) yalnız sayfa sayımı
+  // ve eski kayıtlar için. restoredTop: geri yüklemenin kendi kaydırmasını kullanıcınınkinden ayırır.
+  var A = window.KRS_ANCHOR, ix = null, anc = -1, lastAnc = -2, restoredTop = -1;
   var pg = document.createElement('div');
   pg.id = 'pg';
   root.appendChild(pg);
@@ -67,11 +70,24 @@
     }
     return lo;
   }
+  function anchorIndex() {
+    if (!ix && A && ready) ix = A.index(document);
+    return ix;
+  }
+  function topUnit() {
+    var x = anchorIndex();
+    if (!x) return -1;
+    return paged() ? A.pageUnit(x, pager().scrollLeft, pageIdx * window.innerWidth) : A.topUnit(x);
+  }
+  function unitRect(k) {
+    var x = anchorIndex();
+    return x && k > 0 ? A.rectOf(x, k) : null;
+  }
   function footer() { pg.textContent = paged() ? (pageIdx + 1) + ' / ' + pageTotal : ''; }
   // u: kullanıcı eylemi (kaydırma/çevirme) — yalnız u=1 olanlar kaydedilir
   function report(u) {
     footer();
-    post({ t: 'pos', ch: ch, p: Number(ratio.toFixed(6)), b: anchor, nb: blocks.length,
+    post({ t: 'pos', ch: ch, p: Number(ratio.toFixed(6)), b: anchor, c: anc, nb: blocks.length,
            page: pageIdx, pages: pageTotal, u: u ? 1 : 0 });
   }
 
@@ -95,25 +111,35 @@
     st.setProperty('--bh', Math.max(0, ph - 2 * VPAD) + 'px');
     st.setProperty('--mx', Math.round((pw * P.mg) / 100) + 'px');
     restoring = true;
+    restoredTop = -1;
     var promoted = false;
+    // öncelik: satır başı (c) → eski blok (b) → oran
+    var ar = unitRect(anc);
     if (paged()) {
       var range = document.createRange();
       range.selectNodeContents(document.body);
-      var right = range.getBoundingClientRect().right + pager().scrollLeft;
+      var sl = pager().scrollLeft;
+      var right = range.getBoundingClientRect().right + sl;
       pageTotal = Math.max(1, Math.ceil((right - 1) / pw));
-      pageIdx = anchor >= 0 ? pageOfBlock(anchor) : (pageTotal <= 1 ? 0 : Math.round(ratio * (pageTotal - 1)));
+      if (anc === 0) pageIdx = 0;
+      else if (ar) pageIdx = Math.max(0, Math.min(pageTotal - 1, Math.floor((ar.left + sl + 1) / pw)));
+      else pageIdx = anchor >= 0 ? pageOfBlock(anchor) : (pageTotal <= 1 ? 0 : Math.round(ratio * (pageTotal - 1)));
       pager().scrollLeft = pageIdx * pw;
       ratio = pageTotal <= 1 ? 0 : pageIdx / (pageTotal - 1);
       if (pageTotal <= 1) { ratio = 1; promoted = true; }  // tek sayfalık bölüm
     } else {
       pageTotal = 1; pageIdx = 0;
       var max = Math.max(0, e.scrollHeight - e.clientHeight);
-      e.scrollTop = anchor >= 0 ? scrollTopOf(anchor) : Math.round(ratio * max);
+      if (anc === 0) e.scrollTop = 0;
+      else if (ar) e.scrollTop = Math.max(0, Math.round(ar.top + e.scrollTop - 8));
+      else e.scrollTop = anchor >= 0 ? scrollTopOf(anchor) : Math.round(ratio * max);
       if (max <= 2) { ratio = 1; promoted = true; }          // tek ekranlık bölüm
       else ratio = clamp01(e.scrollTop / max);
+      restoredTop = e.scrollTop;
     }
     if (anchor < 0) anchor = paged() ? blockAtPage(pageIdx) : blockAtScroll();
-    lastBlock = anchor;
+    if (anc < 0) anc = topUnit();
+    lastBlock = anchor; lastAnc = anc;
     requestAnimationFrame(function () {
       requestAnimationFrame(function () {
         restoring = false;
@@ -132,13 +158,18 @@
     if (restoring) { deferred = true; return; }
     if (paged()) return;
     var e = se(), max = Math.max(0, e.scrollHeight - e.clientHeight);
+    // geri yüklemenin kendi kaydırması: başka cihazın satır başı burada satır ortası olabilir,
+    // yeniden hesaplanıp kaydedilirse konum kayardı
+    if (restoredTop >= 0 && Math.abs(e.scrollTop - restoredTop) <= 1) return;
+    restoredTop = -1;
     var r = max > 0 ? clamp01(e.scrollTop / max) : 0;
     if (e.scrollTop + e.clientHeight >= e.scrollHeight - 2) r = 1;
     ratio = r;
     var b = blockAtScroll();
+    var c = topUnit();
     var end = r >= 1 && !sentEnd;
-    if (b !== lastBlock || end) {
-      anchor = b; lastBlock = b;
+    if (b !== lastBlock || c !== lastAnc || end) {
+      anchor = b; lastBlock = b; anc = c; lastAnc = c;
       if (r >= 1) sentEnd = true;
       report(true);
     }
@@ -156,6 +187,7 @@
     ratio = pageTotal <= 1 ? 0 : i / (pageTotal - 1);
     pager().scrollLeft = i * window.innerWidth;
     anchor = blockAtPage(i);
+    anc = topUnit(); lastAnc = anc;
     report(true);
   }
 
@@ -178,8 +210,10 @@
 
   var RC = (window.RC = {});
   RC.setPrefs = function (p) { P = p; applyPrefs(); relayoutSoon(); };
-  RC.load = function (path, c, r, b) {
-    ready = false; ch = c; ratio = clamp01(r); anchor = (typeof b === 'number' && b >= 0) ? b : -1; sentEnd = false;
+  function nonNeg(v) { return (typeof v === 'number' && v >= 0) ? Math.floor(v) : -1; }
+  // pin: "kaldığın yer" belirteci; -1 yok, -2 geri yüklenen satıra, ≥0 o satır başına
+  RC.load = function (path, c, r, b, a, pin) {
+    ready = false; ch = c; ratio = clamp01(r); anchor = nonNeg(b); anc = nonNeg(a); sentEnd = false; ix = null;
     fetch(path).then(function (res) {
       if (!res.ok) throw new Error('HTTP ' + res.status);
       return res.text();
@@ -188,7 +222,13 @@
       collectBlocks();
       if (anchor >= blocks.length) anchor = -1;
       ready = true; applyPrefs(); relayout();
-      post({ t: 'loaded', ch: ch, pages: pageTotal });
+      var pinned = -1;
+      if (A && (pin === -2 || pin >= 0)) {
+        var x = anchorIndex();
+        pinned = pin === -2 ? Math.max(anc, 0) : pin;
+        if (x && x.total && A.pin(x, pinned)) { ix = null; pinned = Math.min(pinned, x.total - 1); } else pinned = -1;
+      }
+      post({ t: 'loaded', ch: ch, pages: pageTotal, pin: pinned });
     }).catch(function (err) { post({ t: 'error', msg: String(err) }); });
   };
   RC.page = function (d) {                 // Kotlin: ses tuşları / düğmeler

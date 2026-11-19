@@ -13,8 +13,8 @@ android {
         applicationId = "io.github.mustafabayramguven.readcrab"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.1.1"
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
     }
     // Release imzası yalnız ortamdan (release.yml): anahtar depoya girmez. Yoksa imzasız derlenir.
@@ -53,7 +53,7 @@ kotlin { compilerOptions { jvmTarget.set(JvmTarget.JVM_17) } }
 // Okuyucu için web/ altından yalnız gerekenler assets köküne (=> /static/...) gider
 val syncWebAssets by tasks.registering(Sync::class) {
     from(rootProject.projectDir.resolve("../web")) {
-        include("frame.css", "reader-fonts.css", "fonts/**")
+        include("frame.css", "reader-fonts.css", "anchor.js", "fonts/**")
         exclude("fonts/roboto-flex-*")
     }
     into(layout.buildDirectory.dir("webAssets"))
