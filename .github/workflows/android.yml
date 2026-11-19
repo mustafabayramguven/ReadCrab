@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - "crates/**"
+      - "!crates/tui/**"
       - "android/**"
       - "web/fonts/**"
       - "web/frame.css"

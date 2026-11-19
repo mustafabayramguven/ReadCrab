@@ -35,6 +35,26 @@ Veritabanı ilk açılışta otomatik olarak yeni şemaya geçer (`user_version`
 - **Tam ekran** düğmesi (tarayıcı destekliyorsa) ve okuma sırasında ekranın açık kalması (tarayıcı destekliyorsa).
 - **Ana ekrana ekleme (PWA):** Uygulama manifesti ve simgeleri vardır. Service worker yoktur; uygulama çevrimdışı çalışmaz. Ana ekrana ekleme için tarayıcı güvenli bağlantı (HTTPS veya `localhost`) ister.
 
+## Terminal okuyucu (Linux)
+
+`crates/tui`, Android uygulamasıyla aynı Rust çekirdeğini (`crates/core`) kullanan bir terminal istemcisidir ([ratatui](https://ratatui.rs)). Kütüphane, indirme, çevrimdışı okuma, ilerleme ve yer imi eşitlemesi, okuma süresi ve istatistikler web ve Android ile ortaktır; bir cihazda kalınan yer diğerinde açılırken önerilir.
+
+**Kurulum:** [Releases](https://github.com/mustafabayramguven/ReadCrab/releases) sayfasındaki `readcrab-tui-*-x86_64-linux.tar.gz` arşivini açıp `readcrab-tui` dosyasını `PATH`'teki bir dizine (ör. `~/.local/bin`) koyun. Kaynaktan: `cargo build --release -p readcrab_tui`.
+
+```
+readcrab-tui                  # ilk açılışta sunucu adresi, kullanıcı adı ve parola sorulur
+readcrab-tui --halfblocks     # grafik protokolü olmayan terminaller için
+```
+
+- **Metin kitaplar (EPUB, MOBI):** Bölüm terminal genişliğine dizilir; başlık, liste, alıntı, kalın/italik korunur, görseller `[görsel: …]` olarak gösterilir. Boşluk sonraki sayfa, `t` içindekiler, `m`/`M` yer imi, `/` kitapta arama, `+`/`-` metin genişliği.
+- **Çizgi roman (CBZ, CBR):** Sayfalar terminalin desteklediği protokolle çizilir (sixel: foot, WezTerm, xterm; kitty; iTerm2), yoksa yarım blok karakterlerle.
+- **Çevrimdışı:** Seride `d` kitabı, `D` serinin tamamını indirir. Bağlantı yokken yapılan ilerleme yerelde bekler, bağlantı gelince gönderilir.
+- Her ekranda `?` o ekranın tuşlarını gösterir.
+- Veri `~/.local/share/readcrab-tui` altında (yalnız kullanıcıya açık) tutulur; `--data-dir` ile değiştirilebilir. Parola saklanmaz, yalnız oturum belirteci saklanır.
+- `http://` yalnız yerel ağ adreslerinde kabul edilir; internetteki sunucu için `https://` adresi girilmelidir.
+
+GitHub Actions'ta `tui.yml` her değişiklikte derler ve test eder; `tui-vX.Y.Z` etiketi (`crates/tui/Cargo.toml` sürümüyle aynı olmalı) Linux ikilisini Releases'ta yayınlar.
+
 ## Ortam değişkenleri
 
 | Değişken | Varsayılan | Anlam |

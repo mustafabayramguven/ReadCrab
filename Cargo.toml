@@ -6,7 +6,7 @@ rust-version = "1.89"
 license = "GPL-3.0-only"
 
 [workspace]
-members = [".", "crates/core"]
+members = [".", "crates/core", "crates/tui"]
 resolver = "3"
 
 [[bin]]
