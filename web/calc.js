@@ -185,7 +185,31 @@
     return 'Bu kitapta ~' + t + ' kaldı';
   }
 
+  // Ardışık iki gün de bağlıysa (nitelikli veya donmuş) aralarına bağlantı. cells = yearGrid(y).cells (günlük, sıralı).
+  function chainLinks(cells, byDate) {
+    var out = [];
+    function linked(d) { return !!d && (d.qualified === true || d.frozen === true); }
+    for (var i = 0; i + 1 < cells.length; i++) {
+      var da = byDate[cells[i].date], db = byDate[cells[i + 1].date];
+      if (linked(da) && linked(db)) {
+        out.push({ a: i, b: i + 1, wrap: cells[i + 1].col !== cells[i].col, current: !!(da.in_current && db.in_current) });
+      }
+    }
+    return out;
+  }
+
+  function streakMessage(s) {
+    var min = s.streak_min_seconds || 300;
+    var mins = Math.max(1, Math.ceil(Math.max(0, min - (s.today_seconds || 0)) / 60));
+    var freezeText = s.freeze_available ? 'Bu haftanın dondurma hakkı duruyor' : 'Bu haftanın dondurma hakkı kullanıldı';
+    if (s.streak_at_risk) return { kind: 'risk', text: 'Seriyi korumak için bugün ' + mins + ' dk daha oku', freezeText: freezeText };
+    if ((s.streak_current || 0) > 0) return { kind: 'ok', text: 'Bugünkü hedef tamam', freezeText: freezeText };
+    return { kind: 'none', text: 'Seri başlatmak için bugün ' + mins + ' dk oku', freezeText: freezeText };
+  }
+
   var api = {
+    chainLinks: chainLinks,
+    streakMessage: streakMessage,
     DEFAULT_PREFS: DEFAULT_PREFS,
     FONTS: FONTS,
     heatThresholds: heatThresholds,

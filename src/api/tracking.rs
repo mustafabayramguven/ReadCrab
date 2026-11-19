@@ -73,6 +73,7 @@ struct ProgressRes {
     locator: String,
     percent: f64,
     status: String,
+    updated_at: i64,
 }
 
 async fn get_progress(
@@ -97,7 +98,7 @@ async fn get_progress(
 
             let row: Option<ProgressRes> = conn
                 .query_row(
-                    "SELECT locator, percent, status
+                    "SELECT locator, percent, status, updated_at
                      FROM progress
                      WHERE user_id = ?1 AND book_id = ?2",
                     rusqlite::params![user_id, id],
@@ -106,6 +107,7 @@ async fn get_progress(
                             locator: r.get(0)?,
                             percent: r.get(1)?,
                             status: r.get(2)?,
+                            updated_at: r.get(3)?,
                         })
                     },
                 )
@@ -115,6 +117,7 @@ async fn get_progress(
                 locator: String::new(),
                 percent: 0.0,
                 status: "unread".to_string(),
+                updated_at: 0,
             }))
         })
         .await?;
@@ -127,12 +130,16 @@ struct PutProgressReq {
     locator: String,
     percent: f64,
     local_date: String,
+    #[serde(default)]
+    client_ts: Option<i64>,
 }
 
 #[derive(Serialize)]
 struct PutProgressRes {
     status: String,
     percent: f64,
+    applied: bool,
+    updated_at: i64,
 }
 
 async fn put_progress(
@@ -148,14 +155,18 @@ async fn put_progress(
         return Err(AppError::BadRequest("Konum bilgisi çok uzun."));
     }
     parse_local_date(&req.local_date)?;
+    if matches!(req.client_ts, Some(t) if t < 1) {
+        return Err(AppError::BadRequest("Geçersiz client_ts."));
+    }
 
     let user_id = user.id;
     let now = unix_now();
     let percent = req.percent;
     let locator = req.locator;
     let local_date = req.local_date;
+    let client_ts = req.client_ts;
 
-    let status = state
+    let (status, percent, applied, updated_at) = state
         .db
         .run(move |conn| {
             let exists: Option<i64> = conn
@@ -169,23 +180,31 @@ async fn put_progress(
                 return Err(AppError::NotFound);
             }
 
-            let prev: Option<(String, Option<String>)> = conn
+            let prev: Option<(String, Option<String>, i64, f64)> = conn
                 .query_row(
-                    "SELECT status, finished_date
+                    "SELECT status, finished_date, updated_at, percent
                      FROM progress
                      WHERE user_id = ?1 AND book_id = ?2",
                     rusqlite::params![user_id, id],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
                 )
                 .optional()?;
 
+            // istemci damgası gelecekten gelemez; yoksa sunucu saati
+            let ts = client_ts.map_or(now, |t| t.min(now));
+            if let Some((ref st, _, prev_ts, prev_pct)) = prev {
+                if prev_ts > ts {
+                    return Ok((st.clone(), prev_pct, false, prev_ts));
+                }
+            }
+
             let (new_status, new_finished_date) = if percent >= FINISHED_PERCENT {
                 let fin_date = match prev {
-                    Some((ref st, Some(ref d))) if st == "finished" => Some(d.clone()),
+                    Some((ref st, Some(ref d), _, _)) if st == "finished" => Some(d.clone()),
                     _ => Some(local_date),
                 };
                 ("finished".to_string(), fin_date)
-            } else if let Some((ref st, ref fin_date)) = prev {
+            } else if let Some((ref st, ref fin_date, _, _)) = prev {
                 if st == "finished" {
                     ("finished".to_string(), fin_date.clone())
                 } else {
@@ -212,26 +231,35 @@ async fn put_progress(
                     percent,
                     new_status,
                     new_finished_date,
-                    now
+                    ts
                 ],
             )?;
 
-            Ok(new_status)
+            Ok((new_status, percent, true, ts))
         })
         .await?;
 
-    Ok(Json(PutProgressRes { status, percent }))
+    Ok(Json(PutProgressRes {
+        status,
+        percent,
+        applied,
+        updated_at,
+    }))
 }
 
 #[derive(Deserialize)]
 struct PutStatusReq {
     status: String,
     local_date: String,
+    #[serde(default)]
+    client_ts: Option<i64>,
 }
 
 #[derive(Serialize)]
 struct PutStatusRes {
     status: String,
+    applied: bool,
+    updated_at: i64,
 }
 
 async fn put_status(
@@ -247,14 +275,17 @@ async fn put_status(
         return Err(AppError::BadRequest("Geçersiz okuma durumu."));
     }
     parse_local_date(&req.local_date)?;
+    if matches!(req.client_ts, Some(t) if t < 1) {
+        return Err(AppError::BadRequest("Geçersiz client_ts."));
+    }
 
     let user_id = user.id;
     let now = unix_now();
     let status = req.status;
     let local_date = req.local_date;
+    let client_ts = req.client_ts;
 
-    let status_clone = status.clone();
-    state
+    let (status, applied, updated_at) = state
         .db
         .run(move |conn| {
             let exists: Option<i64> = conn
@@ -268,19 +299,27 @@ async fn put_status(
                 return Err(AppError::NotFound);
             }
 
-            let prev: Option<(String, Option<String>)> = conn
+            let prev: Option<(String, Option<String>, i64)> = conn
                 .query_row(
-                    "SELECT status, finished_date
+                    "SELECT status, finished_date, updated_at
                      FROM progress
                      WHERE user_id = ?1 AND book_id = ?2",
                     rusqlite::params![user_id, id],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
                 )
                 .optional()?;
 
-            let finished_date = if status_clone == "finished" {
+            // istemci damgası gelecekten gelemez; yoksa sunucu saati
+            let ts = client_ts.map_or(now, |t| t.min(now));
+            if let Some((ref st, _, prev_ts)) = prev {
+                if prev_ts > ts {
+                    return Ok((st.clone(), false, prev_ts));
+                }
+            }
+
+            let finished_date = if status == "finished" {
                 match prev {
-                    Some((ref st, Some(ref d))) if st == "finished" => Some(d.clone()),
+                    Some((ref st, Some(ref d), _)) if st == "finished" => Some(d.clone()),
                     _ => Some(local_date),
                 }
             } else {
@@ -295,13 +334,17 @@ async fn put_status(
                     status = excluded.status,
                     finished_date = excluded.finished_date,
                     updated_at = excluded.updated_at",
-                rusqlite::params![user_id, id, status_clone, finished_date, now],
+                rusqlite::params![user_id, id, status, finished_date, ts],
             )?;
-            Ok(())
+            Ok((status, true, ts))
         })
         .await?;
 
-    Ok(Json(PutStatusRes { status }))
+    Ok(Json(PutStatusRes {
+        status,
+        applied,
+        updated_at,
+    }))
 }
 
 #[derive(Deserialize)]

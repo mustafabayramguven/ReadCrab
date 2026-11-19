@@ -97,4 +97,31 @@ assert.equal(c.formatEta(540, 0), 'Bu kitapta ~9 dk kaldı');
 assert.equal(c.formatEta(1500, 0), 'Bu kitapta ~25 dk kaldı');
 assert.equal(c.formatEta(7800, 0), 'Bu kitapta ~2 sa 10 dk kaldı');
 
+// chainLinks
+const cells = c.yearGrid(2026).cells;
+const idx = (d) => cells.findIndex((x) => x.date === d);
+const byDate = {
+  '2026-11-03': { qualified: true, frozen: false, in_current: true },
+  '2026-11-04': { qualified: false, frozen: true, in_current: true },
+  '2026-11-05': { qualified: true, frozen: false, in_current: true },
+  '2026-11-06': { qualified: false, frozen: false, in_current: false },
+  '2026-11-07': { qualified: true, frozen: false, in_current: false },
+  '2026-11-08': { qualified: true, frozen: false, in_current: false }
+};
+const links = c.chainLinks(cells, byDate);
+assert.deepEqual(links.map((l) => [l.a, l.b]), [[idx('2026-11-03'), idx('2026-11-04')], [idx('2026-11-04'), idx('2026-11-05')], [idx('2026-11-07'), idx('2026-11-08')]]);
+assert.deepEqual(links.map((l) => l.current), [true, true, false]);
+assert.equal(links[2].wrap, false); // 11-07 Cumartesi ve 11-08 Pazar aynı sütunda
+byDate['2026-11-09'] = { qualified: true, frozen: false, in_current: false };
+const wrapLink = c.chainLinks(cells, byDate).find((l) => l.a === idx('2026-11-08'));
+assert.equal(wrapLink.wrap, true); // Pazar -> sonraki Pazartesi: yeni sütun
+
+// streakMessage
+assert.deepEqual(c.streakMessage({ streak_at_risk: true, today_seconds: 0, streak_min_seconds: 300, freeze_available: true, streak_current: 4 }),
+  { kind: 'risk', text: 'Seriyi korumak için bugün 5 dk daha oku', freezeText: 'Bu haftanın dondurma hakkı duruyor' });
+assert.equal(c.streakMessage({ streak_at_risk: true, today_seconds: 241, streak_min_seconds: 300, freeze_available: false }).text, 'Seriyi korumak için bugün 1 dk daha oku');
+assert.equal(c.streakMessage({ streak_at_risk: false, streak_current: 3, today_seconds: 300, streak_min_seconds: 300, freeze_available: false }).kind, 'ok');
+assert.equal(c.streakMessage({ streak_current: 0, today_seconds: 120, streak_min_seconds: 300, freeze_available: true }).text, 'Seri başlatmak için bugün 3 dk oku');
+assert.equal(c.streakMessage({ streak_current: 0, freeze_available: false }).freezeText, 'Bu haftanın dondurma hakkı kullanıldı');
+
 console.log('calc.test.mjs: tüm testler başarılı');

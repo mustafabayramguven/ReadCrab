@@ -20,7 +20,7 @@ use rand::RngCore;
 use rusqlite::OptionalExtension;
 use sha2::{Digest, Sha256};
 
-use crate::{app::AppState, error::AppError};
+use crate::{app::AppState, config::Cidr, error::AppError};
 
 pub const SESSION_COOKIE_NAME: &str = "krs_session";
 pub const SESSION_TTL_SECS: i64 = 30 * 86400;
@@ -240,8 +240,13 @@ impl LoginLimiter {
         });
         if map.len() > MAX_BUCKETS {
             let remove_count = map.len() - MAX_BUCKETS;
-            let mut order: Vec<(String, Option<Instant>)> =
-                map.iter().map(|(k, b)| (k.clone(), b.last_seen)).collect();
+            // kilitli kova asla düşürülmez: yoksa tabloyu sahte girdilerle doldurup bir hesabın
+            // kilidini sıfırlamak (parola denemeye kesintisiz devam etmek) mümkün olurdu
+            let mut order: Vec<(String, Option<Instant>)> = map
+                .iter()
+                .filter(|(_, b)| b.remaining_lock(now).is_none())
+                .map(|(k, b)| (k.clone(), b.last_seen))
+                .collect();
             order.sort_by_key(|(_, ts)| *ts);
             for (k, _) in order.into_iter().take(remove_count) {
                 map.remove(&k);
@@ -300,6 +305,32 @@ impl LoginLimiter {
             }
         }
     }
+}
+
+/// Hız sınırı için istemci IP'si. Eş adres `TRUSTED_PROXIES` içindeyse `X-Forwarded-For`
+/// sağdan sola okunur ve ilk güvenilmeyen adres alınır (vekilin eklediği gerçek istemci);
+/// aksi halde eş adres. Böylece ters vekil arkasında herkes tek IP kovasını paylaşmaz,
+/// doğrudan bağlanan biri de başlığı sahteleyemez.
+pub fn client_ip(peer: IpAddr, headers: &HeaderMap, trusted: &[Cidr]) -> IpAddr {
+    let peer = peer.to_canonical();
+    let is_trusted = |ip: IpAddr| trusted.iter().any(|c| c.contains(ip));
+    if !is_trusted(peer) {
+        return peer;
+    }
+    let mut ip = peer;
+    for val in headers.get_all("x-forwarded-for").iter().rev() {
+        let Ok(s) = val.to_str() else { return ip };
+        for part in s.rsplit(',') {
+            let Ok(p) = part.trim().parse::<IpAddr>() else {
+                return ip;
+            };
+            ip = p.to_canonical();
+            if !is_trusted(ip) {
+                return ip;
+            }
+        }
+    }
+    ip
 }
 
 pub async fn origin_and_content_type_guard(req: Request, next: Next) -> Response {
@@ -399,5 +430,53 @@ mod tests {
         }
         let len = limiter.buckets.lock().unwrap().len();
         assert!(len <= MAX_BUCKETS, "len: {len}");
+    }
+
+    #[test]
+    fn locked_bucket_survives_table_flood() {
+        let limiter = LoginLimiter::new();
+        let attacker = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 9));
+        for _ in 0..USER_MAX_FAILS {
+            let _ = limiter.reserve("admin", attacker);
+        }
+        assert!(limiter.reserve("admin", attacker).is_err());
+        // farklı IP'lerden binlerce sahte deneme tabloyu taşırır
+        for i in 0..6_000u32 {
+            let ip = IpAddr::V4(Ipv4Addr::from(0x0A00_0000 + i));
+            let _ = limiter.reserve(&format!("x{i}"), ip);
+        }
+        let other = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 1));
+        assert!(
+            limiter.reserve("admin", other).is_err(),
+            "admin kilidi tahliyeyle sıfırlanmamalı"
+        );
+    }
+
+    #[test]
+    fn client_ip_trusts_only_configured_proxies() {
+        let trusted = vec![Cidr::parse("172.16.0.0/12").unwrap()];
+        let mut h = HeaderMap::new();
+        h.insert("x-forwarded-for", "1.2.3.4".parse().unwrap());
+        let proxy: IpAddr = "172.19.0.2".parse().unwrap();
+        let direct: IpAddr = "8.8.8.8".parse().unwrap();
+        assert_eq!(
+            client_ip(proxy, &h, &trusted),
+            "1.2.3.4".parse::<IpAddr>().unwrap()
+        );
+        // doğrudan bağlanan biri başlığı sahteleyemez
+        assert_eq!(client_ip(direct, &h, &trusted), direct);
+        // güven listesi boşsa başlık yok sayılır
+        assert_eq!(client_ip(proxy, &h, &[]), proxy);
+        // sahte sol girdiler atlanır, sağdan ilk güvenilmeyen alınır
+        h.insert(
+            "x-forwarded-for",
+            "9.9.9.9, 5.6.7.8, 172.20.0.3".parse().unwrap(),
+        );
+        assert_eq!(
+            client_ip(proxy, &h, &trusted),
+            "5.6.7.8".parse::<IpAddr>().unwrap()
+        );
+        // başlık yoksa vekil adresi
+        assert_eq!(client_ip(proxy, &HeaderMap::new(), &trusted), proxy);
     }
 }

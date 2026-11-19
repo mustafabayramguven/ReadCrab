@@ -1,0 +1,33 @@
+[package]
+name = "readcrab_core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+license = "GPL-3.0-only"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[features]
+cli = ["uniffi/cli"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "uniffi-bindgen.rs"
+required-features = ["cli"]
+
+[dependencies]
+uniffi           = { version = "=0.29.5" }
+ureq             = { version = "=2.12.1", default-features = false, features = ["tls", "json"] }
+rusqlite         = { version = "=0.37.0", features = ["bundled"] }
+serde            = { version = "=1.0.219", features = ["derive"] }
+serde_json       = "=1.0.143"
+sha2             = "=0.10.9"
+hex              = "=0.4.3"
+rand             = "=0.8.5"
+percent-encoding = "=2.3.2"
+httpdate         = "=1.0.3"
+
+[dev-dependencies]
+tiny_http = "=0.12.0"
+tempfile  = "=3.22.0"

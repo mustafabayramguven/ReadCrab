@@ -43,6 +43,7 @@ Veritabanı ilk açılışta otomatik olarak yeni şemaya geçer (`user_version`
 | `DATA_DIR` | `/data` | `readcrab.db`, `covers/` |
 | `BOOKS_DIR` | `/books` | Salt okunur kütüphane |
 | `COOKIE_SECURE` | `0` | `1` ise çereze `Secure` eklenir (HTTPS arkasında) |
+| `TRUSTED_PROXIES` | boş | Ters vekilin adresi/ağı, virgülle (ör. `172.16.0.0/12`). Giriş hız sınırı yalnız bu adreslerden gelen isteklerde `X-Forwarded-For`'daki gerçek istemci IP'sini kullanır; boşsa vekil arkasında tüm istemciler tek IP sayılır ve 20 hatalı giriş herkesi 15 dk kilitler |
 | `RUST_LOG` | `info` | tracing filtresi |
 
 ## Notlar

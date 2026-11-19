@@ -4,7 +4,7 @@ use axum::{
     body::Body,
     http::{header, Request, StatusCode},
 };
-use common::{body_json, login_as_admin, make_cbz, make_epub, png, test_app, EpubOpts};
+use common::{body_json, call, login_as_admin, make_cbz, make_epub, png, test_app, EpubOpts};
 use readcrab::scan::scan_once;
 use tower::ServiceExt;
 
@@ -552,16 +552,16 @@ async fn stats_streaks_and_daily() {
     dirs.db
         .run(move |conn| {
             let sessions = [
-                // Longest streak of 3 days in October: Oct 10, 11, 12 (>= 60s each)
-                ("c0000000000000000000000000000001", "2026-10-10", 60, 2),
-                ("c0000000000000000000000000000002", "2026-10-11", 90, 3),
-                ("c0000000000000000000000000000003", "2026-10-12", 120, 4),
-                // Day with < 60s does not count towards streak:
-                ("c0000000000000000000000000000004", "2026-10-13", 59, 1),
+                // Longest streak of 3 days in October: Oct 10, 11, 12 (>= 300s each)
+                ("c0000000000000000000000000000001", "2026-10-10", 300, 2),
+                ("c0000000000000000000000000000002", "2026-10-11", 400, 3),
+                ("c0000000000000000000000000000003", "2026-10-12", 500, 4),
+                // Day with < 300s does not count towards streak:
+                ("c0000000000000000000000000000004", "2026-10-13", 299, 1),
                 // Current streak ending yesterday (Nov 6, Nov 7) when today = Nov 8:
-                ("c0000000000000000000000000000005", "2026-11-06", 30, 1),
-                ("c0000000000000000000000000000006", "2026-11-06", 35, 2), // sum = 65 >= 60
-                ("c0000000000000000000000000000007", "2026-11-07", 100, 5),
+                ("c0000000000000000000000000000005", "2026-11-06", 150, 1),
+                ("c0000000000000000000000000000006", "2026-11-06", 160, 2), // sum = 310 >= 300
+                ("c0000000000000000000000000000007", "2026-11-07", 350, 5),
             ];
             for (cid, date, secs, pages) in sessions {
                 conn.execute(
@@ -591,21 +591,65 @@ async fn stats_streaks_and_daily() {
     assert_eq!(res.status(), StatusCode::OK);
     let stats = body_json(res).await;
 
-    assert_eq!(stats["total_seconds"], 60 + 90 + 120 + 59 + 30 + 35 + 100);
+    assert_eq!(
+        stats["total_seconds"],
+        300 + 400 + 500 + 299 + 150 + 160 + 350
+    );
     assert_eq!(stats["total_pages"], 2 + 3 + 4 + 1 + 1 + 2 + 5);
     assert_eq!(stats["streak_longest"], 3);
     assert_eq!(stats["streak_current"], 2);
+    assert_eq!(stats["streak_at_risk"], true);
+    assert_eq!(stats["today_seconds"], 0);
+    assert_eq!(stats["streak_min_seconds"], 300);
+    assert_eq!(stats["freeze_available"], true);
 
     let daily = stats["daily"].as_array().unwrap();
     assert_eq!(daily.len(), 30);
     assert_eq!(daily[0]["date"], "2026-10-10");
-    assert_eq!(daily[0]["seconds"], 60);
+    assert_eq!(daily[0]["seconds"], 300);
     assert_eq!(daily[29]["date"], "2026-11-08");
     assert_eq!(daily[29]["seconds"], 0);
     assert_eq!(daily[28]["date"], "2026-11-07");
-    assert_eq!(daily[28]["seconds"], 100);
+    assert_eq!(daily[28]["seconds"], 350);
     assert_eq!(daily[27]["date"], "2026-11-06");
-    assert_eq!(daily[27]["seconds"], 65);
+    assert_eq!(daily[27]["seconds"], 310);
+}
+
+async fn seed_session(dirs: &common::TempDirs, book_id: i64, cid: &str, secs: i64) {
+    let cid = cid.to_string();
+    dirs.db
+        .run(move |conn| {
+            conn.execute(
+                "INSERT INTO reading_sessions(
+                    user_id, book_id, client_id, started_at, ended_at,
+                    active_seconds, pages_read, start_percent, end_percent, local_date
+                 ) VALUES (1, ?1, ?2, 1000, 1100, ?3, 1, 0.0, 0.5, '2026-09-01')",
+                rusqlite::params![book_id, cid, secs],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn stats_threshold_boundary() {
+    let (app, dirs) = test_app().await;
+    let cookie = login_as_admin(&app).await;
+    let (cbz_id, _) = setup_two_books(&dirs).await;
+
+    seed_session(&dirs, cbz_id, "d0000000000000000000000000000001", 299).await;
+    let (st, v) = call(&app, "GET", "/api/stats?today=2026-09-01", &cookie, None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(v["streak_current"], 0);
+    assert_eq!(v["today_seconds"], 299);
+
+    // aynı günün oturumları toplanır: 299 + 1 = 300 eşiği geçer
+    seed_session(&dirs, cbz_id, "d0000000000000000000000000000002", 1).await;
+    let (_, v) = call(&app, "GET", "/api/stats?today=2026-09-01", &cookie, None).await;
+    assert_eq!(v["streak_current"], 1);
+    assert_eq!(v["today_seconds"], 300);
+    assert_eq!(v["streak_at_risk"], false);
 }
 
 #[tokio::test]
@@ -831,4 +875,161 @@ async fn ping_client_id_book_mismatch_409() {
     assert_eq!(hist["items"][0]["book_id"], cbz_id);
     assert_eq!(hist["items"][0]["active_seconds"], 30);
     assert_eq!(hist["items"][0]["pages_read"], 3);
+}
+
+fn put_progress_body(locator: &str, client_ts: Option<i64>) -> String {
+    let ts = match client_ts {
+        Some(t) => format!(r#","client_ts":{t}"#),
+        None => String::new(),
+    };
+    format!(r#"{{"locator":"{locator}","percent":0.5,"local_date":"2026-11-08"{ts}}}"#)
+}
+
+#[tokio::test]
+async fn progress_get_returns_updated_at() {
+    let (app, dirs) = test_app().await;
+    let cookie = login_as_admin(&app).await;
+    let (cbz_id, _) = setup_two_books(&dirs).await;
+    let uri = format!("/api/books/{cbz_id}/progress");
+
+    let (st, v) = call(&app, "GET", &uri, &cookie, None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(v["updated_at"], 0);
+
+    let body = put_progress_body("1", None);
+    let (st, _) = call(&app, "PUT", &uri, &cookie, Some(body.as_str())).await;
+    assert_eq!(st, StatusCode::OK);
+
+    let (_, v) = call(&app, "GET", &uri, &cookie, None).await;
+    assert!(v["updated_at"].as_i64().unwrap() > 0);
+}
+
+#[tokio::test]
+async fn progress_put_with_client_ts_applies_when_newer() {
+    let (app, dirs) = test_app().await;
+    let cookie = login_as_admin(&app).await;
+    let (cbz_id, _) = setup_two_books(&dirs).await;
+    let uri = format!("/api/books/{cbz_id}/progress");
+
+    let body = put_progress_body("1", Some(1000));
+    let (st, v) = call(&app, "PUT", &uri, &cookie, Some(body.as_str())).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(v["applied"], true);
+    assert_eq!(v["updated_at"], 1000);
+
+    let body = put_progress_body("2", Some(2000));
+    let (st, v) = call(&app, "PUT", &uri, &cookie, Some(body.as_str())).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(v["applied"], true);
+
+    let (_, v) = call(&app, "GET", &uri, &cookie, None).await;
+    assert_eq!(v["locator"], "2");
+    assert_eq!(v["updated_at"], 2000);
+}
+
+#[tokio::test]
+async fn progress_put_with_stale_client_ts_is_ignored() {
+    let (app, dirs) = test_app().await;
+    let cookie = login_as_admin(&app).await;
+    let (cbz_id, _) = setup_two_books(&dirs).await;
+    let uri = format!("/api/books/{cbz_id}/progress");
+
+    let body = put_progress_body("5", Some(2000));
+    let (st, _) = call(&app, "PUT", &uri, &cookie, Some(body.as_str())).await;
+    assert_eq!(st, StatusCode::OK);
+
+    let body = put_progress_body("1", Some(1500));
+    let (st, v) = call(&app, "PUT", &uri, &cookie, Some(body.as_str())).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(v["applied"], false);
+    assert_eq!(v["updated_at"], 2000);
+
+    let (_, v) = call(&app, "GET", &uri, &cookie, None).await;
+    assert_eq!(v["locator"], "5");
+}
+
+#[tokio::test]
+async fn progress_put_equal_client_ts_applies() {
+    let (app, dirs) = test_app().await;
+    let cookie = login_as_admin(&app).await;
+    let (cbz_id, _) = setup_two_books(&dirs).await;
+    let uri = format!("/api/books/{cbz_id}/progress");
+
+    let body = put_progress_body("1", Some(1000));
+    for _ in 0..2 {
+        let (st, v) = call(&app, "PUT", &uri, &cookie, Some(body.as_str())).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(v["applied"], true);
+    }
+}
+
+#[tokio::test]
+async fn progress_put_future_client_ts_is_clamped() {
+    let (app, dirs) = test_app().await;
+    let cookie = login_as_admin(&app).await;
+    let (cbz_id, _) = setup_two_books(&dirs).await;
+    let uri = format!("/api/books/{cbz_id}/progress");
+
+    let body = put_progress_body("1", Some(99_999_999_999));
+    let (st, v) = call(&app, "PUT", &uri, &cookie, Some(body.as_str())).await;
+    assert_eq!(st, StatusCode::OK);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    assert!(v["updated_at"].as_i64().unwrap() <= now + 5);
+}
+
+#[tokio::test]
+async fn progress_put_invalid_client_ts_rejected() {
+    let (app, dirs) = test_app().await;
+    let cookie = login_as_admin(&app).await;
+    let (cbz_id, _) = setup_two_books(&dirs).await;
+    let uri = format!("/api/books/{cbz_id}/progress");
+
+    let body = put_progress_body("1", Some(0));
+    let (st, _) = call(&app, "PUT", &uri, &cookie, Some(body.as_str())).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn status_put_respects_client_ts() {
+    let (app, dirs) = test_app().await;
+    let cookie = login_as_admin(&app).await;
+    let (cbz_id, _) = setup_two_books(&dirs).await;
+    let status_uri = format!("/api/books/{cbz_id}/status");
+    let progress_uri = format!("/api/books/{cbz_id}/progress");
+
+    let body = r#"{"status":"finished","local_date":"2026-11-08","client_ts":3000}"#;
+    let (st, v) = call(&app, "PUT", &status_uri, &cookie, Some(body)).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(v["applied"], true);
+    assert_eq!(v["updated_at"], 3000);
+
+    let body = r#"{"status":"unread","local_date":"2026-11-08","client_ts":2000}"#;
+    let (st, v) = call(&app, "PUT", &status_uri, &cookie, Some(body)).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(v["applied"], false);
+    assert_eq!(v["status"], "finished");
+
+    let (_, v) = call(&app, "GET", &progress_uri, &cookie, None).await;
+    assert_eq!(v["status"], "finished");
+}
+
+#[tokio::test]
+async fn progress_put_without_client_ts_keeps_old_behavior() {
+    let (app, dirs) = test_app().await;
+    let cookie = login_as_admin(&app).await;
+    let (cbz_id, _) = setup_two_books(&dirs).await;
+    let uri = format!("/api/books/{cbz_id}/progress");
+
+    let body = put_progress_body("1", None);
+    let (st, v) = call(&app, "PUT", &uri, &cookie, Some(body.as_str())).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(v["applied"], true);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    assert!((v["updated_at"].as_i64().unwrap() - now).abs() <= 5);
 }
