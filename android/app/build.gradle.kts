@@ -17,6 +17,25 @@ android {
         versionName = "0.1.0"
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
     }
+    // Release imzası yalnız ortamdan (release.yml): anahtar depoya girmez. Yoksa imzasız derlenir.
+    val releaseKeystore = System.getenv("RC_KEYSTORE")
+    signingConfigs {
+        if (releaseKeystore != null) {
+            create("release") {
+                storeFile = file(releaseKeystore)
+                storeType = "pkcs12"
+                storePassword = System.getenv("RC_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("RC_KEY_ALIAS")
+                keyPassword = System.getenv("RC_KEYSTORE_PASSWORD")
+            }
+        }
+    }
+    buildTypes {
+        release {
+            isMinifyEnabled = false // JNA/UniFFI yansıma kullanır; R8 kuralları olmadan küçültme kırar
+            signingConfig = signingConfigs.findByName("release")
+        }
+    }
     buildFeatures { compose = true }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

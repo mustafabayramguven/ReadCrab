@@ -35,11 +35,15 @@ impl Cidr {
     pub fn contains(&self, ip: IpAddr) -> bool {
         match (self.net, ip.to_canonical()) {
             (IpAddr::V4(n), IpAddr::V4(i)) => {
-                let mask = u32::MAX.checked_shl(32 - u32::from(self.prefix)).unwrap_or(0);
+                let mask = u32::MAX
+                    .checked_shl(32 - u32::from(self.prefix))
+                    .unwrap_or(0);
                 u32::from(n) & mask == u32::from(i) & mask
             }
             (IpAddr::V6(n), IpAddr::V6(i)) => {
-                let mask = u128::MAX.checked_shl(128 - u32::from(self.prefix)).unwrap_or(0);
+                let mask = u128::MAX
+                    .checked_shl(128 - u32::from(self.prefix))
+                    .unwrap_or(0);
                 u128::from(n) & mask == u128::from(i) & mask
             }
             _ => false,
@@ -114,7 +118,12 @@ mod tests {
     #[test]
     fn trusted_proxies_list() {
         assert_eq!(parse_trusted_proxies("").unwrap(), vec![]);
-        assert_eq!(parse_trusted_proxies("10.0.0.1, 172.16.0.0/12").unwrap().len(), 2);
+        assert_eq!(
+            parse_trusted_proxies("10.0.0.1, 172.16.0.0/12")
+                .unwrap()
+                .len(),
+            2
+        );
         assert!(parse_trusted_proxies("10.0.0.1,xyz").is_err());
     }
 }

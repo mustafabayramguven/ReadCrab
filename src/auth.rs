@@ -459,14 +459,23 @@ mod tests {
         h.insert("x-forwarded-for", "1.2.3.4".parse().unwrap());
         let proxy: IpAddr = "172.19.0.2".parse().unwrap();
         let direct: IpAddr = "8.8.8.8".parse().unwrap();
-        assert_eq!(client_ip(proxy, &h, &trusted), "1.2.3.4".parse::<IpAddr>().unwrap());
+        assert_eq!(
+            client_ip(proxy, &h, &trusted),
+            "1.2.3.4".parse::<IpAddr>().unwrap()
+        );
         // doğrudan bağlanan biri başlığı sahteleyemez
         assert_eq!(client_ip(direct, &h, &trusted), direct);
         // güven listesi boşsa başlık yok sayılır
         assert_eq!(client_ip(proxy, &h, &[]), proxy);
         // sahte sol girdiler atlanır, sağdan ilk güvenilmeyen alınır
-        h.insert("x-forwarded-for", "9.9.9.9, 5.6.7.8, 172.20.0.3".parse().unwrap());
-        assert_eq!(client_ip(proxy, &h, &trusted), "5.6.7.8".parse::<IpAddr>().unwrap());
+        h.insert(
+            "x-forwarded-for",
+            "9.9.9.9, 5.6.7.8, 172.20.0.3".parse().unwrap(),
+        );
+        assert_eq!(
+            client_ip(proxy, &h, &trusted),
+            "5.6.7.8".parse::<IpAddr>().unwrap()
+        );
         // başlık yoksa vekil adresi
         assert_eq!(client_ip(proxy, &HeaderMap::new(), &trusted), proxy);
     }

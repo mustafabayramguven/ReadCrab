@@ -169,7 +169,7 @@ fn strip_self_closing_raw_text(html: &str) -> String {
     while let Some(pos) = rest.find('<') {
         out.push_str(&rest[..pos]);
         let after = &rest[pos..];
-        let Some(stop) = after[1..].find(|c| c == '<' || c == '>').map(|i| i + 1) else {
+        let Some(stop) = after[1..].find(['<', '>']).map(|i| i + 1) else {
             out.push_str(after);
             return out;
         };
@@ -317,7 +317,10 @@ mod tests {
             strip_self_closing_raw_text("a<title/>b<p>c</p><Script x=\"1\"/>d"),
             "ab<p>c</p>d"
         );
-        assert_eq!(strip_self_closing_raw_text("1 < 2 <b>x</b>"), "1 < 2 <b>x</b>");
+        assert_eq!(
+            strip_self_closing_raw_text("1 < 2 <b>x</b>"),
+            "1 < 2 <b>x</b>"
+        );
         assert_eq!(strip_self_closing_raw_text("x<a <title/>y"), "x<a y");
         assert_eq!(strip_self_closing_raw_text("son <"), "son <");
         assert_eq!(strip_self_closing_raw_text("<<"), "<<");
@@ -331,6 +334,10 @@ mod tests {
         let t = std::time::Instant::now();
         let out = strip_self_closing_raw_text(&html);
         assert_eq!(out.len(), html.len());
-        assert!(t.elapsed() < std::time::Duration::from_secs(5), "{:?}", t.elapsed());
+        assert!(
+            t.elapsed() < std::time::Duration::from_secs(5),
+            "{:?}",
+            t.elapsed()
+        );
     }
 }

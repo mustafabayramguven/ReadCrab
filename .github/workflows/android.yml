@@ -72,9 +72,9 @@ jobs:
       - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
         with:
           gradle-version: "8.13"
-      - name: Debug APK + birim testleri
+      - name: Debug APK, imzasız release (derleme/lint denetimi) + birim testleri
         working-directory: android
-        run: gradle --no-daemon assembleDebug testDebugUnitTest
+        run: gradle --no-daemon assembleDebug assembleRelease testDebugUnitTest
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: readcrab-debug-apk
