@@ -9,7 +9,10 @@ pub struct Sty {
     pub italic: bool,
     pub underline: bool,
     pub code: bool,
+    /// Görsel yer tutucusu ("[görsel: …]"); satır başı sayımında görsel başına 1 birim (`[`).
     pub image: bool,
+    /// Ekranda olup HTML metninde olmayan ayırıcı (tablo hücreleri arası); sayılmaz.
+    pub sep: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,6 +37,7 @@ pub struct Block {
 }
 
 impl Block {
+    #[cfg(test)]
     pub fn plain_text(&self) -> String {
         self.spans.iter().map(|(t, _)| t.as_str()).collect()
     }
@@ -64,6 +68,7 @@ impl Parser {
             underline: self.underline > 0,
             code: self.code > 0 || self.pre > 0,
             image: false,
+            sep: false,
         }
     }
 
@@ -267,8 +272,14 @@ impl Parser {
             "u" | "ins" => count(&mut self.underline, closing, self_closing),
             "code" | "kbd" | "samp" | "tt" => count(&mut self.code, closing, self_closing),
             "img" | "image" if !closing => {
+                // köşeli parantez etikette yalnız başta olsun: görsel sayımı `[` ile yapılır
                 let alt = attr(attrs, "alt")
-                    .map(|a| decode_entities(&a).trim().to_string())
+                    .map(|a| {
+                        decode_entities(&a)
+                            .trim()
+                            .replace('[', "(")
+                            .replace(']', ")")
+                    })
                     .filter(|a| !a.is_empty());
                 let label = match alt {
                     Some(a) => format!("[görsel: {a}]"),
@@ -288,7 +299,7 @@ impl Parser {
                     .map(|(t, _)| !t.ends_with(' ') && !t.ends_with('\n'))
                     .unwrap_or(false);
                 if needs_sep {
-                    self.push_text(" · ", sty);
+                    self.push_text(" · ", Sty { sep: true, ..sty });
                 }
             }
             _ => {}

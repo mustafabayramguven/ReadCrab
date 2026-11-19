@@ -57,6 +57,17 @@
     var relayoutTimer = null;
     var snapTimer = null;
     var disposed = false;
+    // Satır başı konumu (locator "c", bkz. anchor.js); -1: bilinmiyor, oran kullanılır
+    var A = window.KRS_ANCHOR;
+    var curAnchor = -1;
+    var anchorIx = null;
+    var restoredTop = -1;
+    // "Kaldığın yer" belirteci: açılıştaki konum, oturum boyunca yerinde kalır.
+    // pinC -2: konum eski biçimde (c yok), geri yüklenen satıra konur.
+    var pinCh = -1;
+    var pinC = -1;
+    // açılışta (kullanıcı kıpırdamadan) satır üst çubuğun altına konur, belirteç görünür kalır
+    var revealPin = false;
 
     if (book.locator) {
       try {
@@ -65,10 +76,26 @@
           var ch = parseInt(parsed.ch, 10);
           if (Number.isFinite(ch) && ch >= 0 && ch < totalChapters) {
             curChapter = ch;
+            var c0 = anchorOf(parsed);
+            curAnchor = c0;
+            pinCh = ch;
+            pinC = c0 >= 0 ? c0 : -2;
+            revealPin = true;
           }
           curRatio = clamp01(parsed.p);
         }
       } catch (_) {}
+    }
+
+    function anchorOf(loc) {
+      var c = loc && loc.c;
+      return typeof c === 'number' && Number.isInteger(c) && c >= 0 ? c : -1;
+    }
+
+    function locatorNow() {
+      var o = { ch: curChapter, p: Number(curRatio.toFixed(6)) };
+      if (curAnchor >= 0) o.c = curAnchor;
+      return JSON.stringify(o);
     }
 
     function isPaged() {
@@ -107,7 +134,7 @@
 
     var bookmarks = ui.bookmarkController(book, {
       getLocator: function () {
-        return JSON.stringify({ ch: curChapter, p: Number(curRatio.toFixed(6)) });
+        return locatorNow();
       },
       getLabel: function () {
         return 'Bölüm ' + (curChapter + 1) + ' · %' + Math.round(overallRatio() * 100);
@@ -217,7 +244,7 @@
       try {
         var loc = JSON.parse(bm.locator);
         navSheet.dialog.close();
-        gotoPosition(Number(loc.ch) || 0, clamp01(loc.p));
+        gotoPosition(Number(loc.ch) || 0, clamp01(loc.p), anchorOf(loc));
       } catch (_) {}
     });
     var TAB_TITLES = { toc: 'İçindekiler', marks: 'Yer imleri', search: 'Ara' };
@@ -341,11 +368,46 @@
     function persist(overall) {
       // yeni çerçeve hazır olana kadar eski konum kaydedilmez
       if (!KRS.tracker || !frameReady) return;
-      KRS.tracker.scheduleProgress(
-        book.id,
-        JSON.stringify({ ch: curChapter, p: Number(curRatio.toFixed(6)) }),
-        overall
-      );
+      KRS.tracker.scheduleProgress(book.id, locatorNow(), overall);
+    }
+
+    // ---- Satır başı konumu ---------------------------------------------------------
+    function anchorIndex() {
+      if (!anchorIx && A && frameReady) {
+        var doc = frameDoc();
+        if (doc && doc.body) anchorIx = A.index(doc);
+      }
+      return anchorIx;
+    }
+
+    // Ekranda/sayfada tam görünen ilk satırın başı
+    function topAnchor() {
+      var ix = anchorIndex();
+      if (!ix) return -1;
+      if (isPaged()) {
+        var se = scrollEl(frameDoc());
+        return A.pageUnit(ix, se ? se.scrollLeft : 0, pageIdx * iframe.clientWidth);
+      }
+      return A.topUnit(ix);
+    }
+
+    // Geri yüklenen satırın görünümün üstünden uzaklığı. Açılışta çubuklar içeriğin üstünde
+    // görünür: satır (ve belirteç) üst çubuğun altına gelir, üstünde bir iki satır bağlam kalır.
+    // Kayıt her zaman ekranın gerçek en üst satırıdır (topUnit).
+    function restoreInset() {
+      if (!revealPin) return 8;
+      var bar = topBar.getBoundingClientRect();
+      var fr = iframe.getBoundingClientRect();
+      return Math.max(8, Math.round(bar.bottom - fr.top) + 8);
+    }
+
+    // Açılıştaki konuma "kaldığın yer" belirteci (bölüm her yüklendiğinde yeniden konur)
+    function applyPin() {
+      if (pinCh !== curChapter) return;
+      var ix = anchorIndex();
+      if (!ix || !ix.total) return;
+      if (pinC === -2) pinC = curAnchor >= 0 ? curAnchor : 0;
+      if (A.pin(ix, pinC)) anchorIx = null;
     }
 
     function updateNavButtons() {
@@ -393,8 +455,8 @@
       }
     }
 
-    // Sayfa/kaydırma düzenini yeniden hesaplar ve konumu curRatio ile korur.
-    // shortcut: oran korunur, yeniden akışta en çok ±1 sayfa kayar; gerekirse caret anchor
+    // Sayfa/kaydırma düzenini yeniden hesaplar; konum satır başıyla (curAnchor), o yoksa
+    // curRatio ile korunur.
     function relayout() {
       if (disposed) return;
       var doc = frameDoc();
@@ -411,21 +473,42 @@
       st.setProperty('--mx', Math.round((pw * prefs.mg) / 100) + 'px');
       var se = scrollEl(doc);
       restoring = true;
+      restoredTop = -1;
+      // satır başı biliniyorsa o satır, yoksa oran; satır, sayfa/ekran değişse de korunur
+      var anchorRect = curAnchor > 0 && A ? A.rectOf(anchorIndex(), curAnchor) : null;
       if (isPaged()) {
         var range = doc.createRange();
         range.selectNodeContents(doc.body);
-        var contentRight = range.getBoundingClientRect().right + (se ? se.scrollLeft : 0);
+        var sl = se ? se.scrollLeft : 0;
+        var contentRight = range.getBoundingClientRect().right + sl;
         pageTotal = calc.pageCount(contentRight, pw);
-        pageIdx = calc.pageFromRatio(curRatio, pageTotal);
+        if (curAnchor === 0) {
+          pageIdx = 0;
+        } else if (anchorRect) {
+          pageIdx = Math.max(0, Math.min(pageTotal - 1, Math.floor((anchorRect.left + sl + 1) / pw)));
+        } else {
+          pageIdx = calc.pageFromRatio(curRatio, pageTotal);
+        }
+        if (curAnchor >= 0) curRatio = calc.ratioFromPage(pageIdx, pageTotal);
         win.scrollTo({ left: pageIdx * pw, top: 0, behavior: 'auto' });
       } else {
         pageTotal = 1;
         pageIdx = 0;
         if (se) {
           var maxScroll = Math.max(0, se.scrollHeight - se.clientHeight);
-          se.scrollTop = Math.round(curRatio * maxScroll);
+          if (curAnchor === 0) {
+            se.scrollTop = 0;
+          } else if (anchorRect) {
+            se.scrollTop = Math.round(anchorRect.top + se.scrollTop - restoreInset());
+          } else {
+            se.scrollTop = Math.round(curRatio * maxScroll);
+          }
+          // tek ekranlık bölümde oran aşağıda 1'e yükseltilip kaydedilir
+          if (curAnchor >= 0 && maxScroll > 2) curRatio = scrollRatio(se);
+          restoredTop = se.scrollTop;
         }
       }
+      if (curAnchor < 0) curAnchor = topAnchor();
       // kaydırma olayları eşzamansız gelir; kilit çift requestAnimationFrame sonrası açılır
       var gen = frameGen;
       requestAnimationFrame(function () {
@@ -472,6 +555,8 @@
     function commitPage(i) {
       pageIdx = i;
       curRatio = calc.ratioFromPage(i, pageTotal);
+      curAnchor = topAnchor();
+      revealPin = false;
       var overall = updateProgressUi();
       if (KRS.tracker) KRS.tracker.addPage(curChapter + ':' + i);
       persist(overall);
@@ -519,14 +604,24 @@
     }
 
     // ---- Kaydırma modu ---------------------------------------------------------------
-    function onScrollMode(doc) {
-      var se = scrollEl(doc);
-      if (!se) return;
+    function scrollRatio(se) {
       var maxScroll = Math.max(0, se.scrollHeight - se.clientHeight);
       var ratio = maxScroll > 0 ? clamp01(se.scrollTop / maxScroll) : 0;
       // kesirli kaydırma/yakınlaştırmada 0.997'de kalmasın: alt uca varınca tam 1
       if (se.scrollTop + se.clientHeight >= se.scrollHeight - 2) ratio = 1;
-      curRatio = ratio;
+      return ratio;
+    }
+
+    function onScrollMode(doc) {
+      var se = scrollEl(doc);
+      if (!se) return;
+      // geri yüklemenin kendi kaydırması: konum değişmedi, satır başı da kaydedilmez
+      // (başka cihazın satır başı burada satır ortası olabilir; yeniden hesaplanırsa kayardı)
+      if (restoredTop >= 0 && Math.abs(se.scrollTop - restoredTop) <= 1) return;
+      restoredTop = -1;
+      revealPin = false;
+      curRatio = scrollRatio(se);
+      curAnchor = topAnchor();
       var overall = updateProgressUi();
       var screenIdx = Math.floor(se.scrollTop / Math.max(1, se.clientHeight));
       if (KRS.tracker) {
@@ -654,11 +749,16 @@
       iframe.style.display = '';
     }
 
-    function loadChapter(idx, targetRatio, saveProg) {
+    // anchor: satır başı (locator "c"); verilmezse targetRatio kullanılır
+    function loadChapter(idx, targetRatio, saveProg, anchor) {
       if (idx < 0 || idx >= totalChapters) return;
       clearErrBox();
       frameReady = false;
       frameGen++;
+      anchorIx = null;
+      restoredTop = -1;
+      curAnchor = anchor >= 0 ? anchor : -1;
+      if (saveProg) revealPin = false;
       restoring = true;
       unbindFrame();
       if (snapTimer) clearTimeout(snapTimer);
@@ -698,7 +798,7 @@
               text: 'Yeniden dene',
               onClick: function () {
                 clearErrBox();
-                loadChapter(curChapter, curRatio, saveProg);
+                loadChapter(curChapter, curRatio, saveProg, curAnchor);
               }
             })
           ]);
@@ -709,6 +809,7 @@
         applyFrameStyles();
         bindFrameEvents();
         relayout();
+        applyPin();
         if (KRS.tracker) {
           if (isPaged()) {
             KRS.tracker.addPage(curChapter + ':' + pageIdx);
@@ -728,14 +829,16 @@
     }
 
     // Aynı bölümdeyse çerçeve yeniden yüklenmeden konuma gider.
-    function gotoPosition(chIdx, p) {
+    function gotoPosition(chIdx, p, anchor) {
       var target = Math.max(0, Math.min(totalChapters - 1, chIdx));
       if (target === curChapter && frameReady) {
         curRatio = clamp01(p);
+        curAnchor = anchor >= 0 ? anchor : -1;
+        revealPin = false;
         relayout();
         persist(overallRatio());
       } else {
-        loadChapter(target, p, true);
+        loadChapter(target, p, true, anchor);
       }
     }
 
@@ -827,7 +930,7 @@
       KRS.tracker.start(book.id, (curChapter + curRatio) / totalChapters);
     }
     applyFrameStyles();
-    loadChapter(curChapter, curRatio, false);
+    loadChapter(curChapter, curRatio, false, curAnchor);
     scheduleHideBars();
 
     window.addEventListener('keydown', handleKey);

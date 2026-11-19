@@ -37,6 +37,7 @@ const FRAME_CSS: &str = include_str!("../web/frame.css");
 const FAVICON_SVG: &str = include_str!("../web/favicon.svg");
 const ICONS_SVG: &str = include_str!("../web/icons.svg");
 const CALC_JS: &str = include_str!("../web/calc.js");
+const ANCHOR_JS: &str = include_str!("../web/anchor.js");
 const READER_UI_JS: &str = include_str!("../web/reader-ui.js");
 const READER_FONTS_CSS: &str = include_str!("../web/reader-fonts.css");
 const MANIFEST: &str = include_str!("../web/manifest.webmanifest");
@@ -312,6 +313,11 @@ async fn static_handler(Path(ad): Path<String>) -> Result<Response, AppError> {
         ),
         "calc.js" => (
             CALC_JS.as_bytes(),
+            "application/javascript; charset=utf-8",
+            "no-cache",
+        ),
+        "anchor.js" => (
+            ANCHOR_JS.as_bytes(),
             "application/javascript; charset=utf-8",
             "no-cache",
         ),

@@ -1704,7 +1704,7 @@ dependencies = [
 
 [[package]]
 name = "readcrab"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ammonia",
  "argon2",
@@ -1733,7 +1733,7 @@ dependencies = [
 
 [[package]]
 name = "readcrab_core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "hex",
  "httpdate",
@@ -1751,7 +1751,7 @@ dependencies = [
 
 [[package]]
 name = "readcrab_tui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "image",
  "libc",

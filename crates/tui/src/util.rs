@@ -110,25 +110,44 @@ pub fn weekday(days: i64) -> u32 {
     ((days + 3).rem_euclid(7)) as u32
 }
 
-/// Metin kitabı konumu: web `{"ch","p"}`, mobil `{"ch","p","b"}`.
-#[derive(serde::Deserialize)]
-struct TextLoc {
-    ch: i64,
-    p: f64,
+/// Metin kitabı konumu `{"ch","p","c"}`: bölüm, bölüm içi kaydırma oranı ve satır başı.
+/// `c`, satır başından önceki anlamlı birim sayısıdır (bkz. `wrap::significant`); web, Android
+/// ve terminal aynı metin konumunu bulur. Eski kayıtlarda yoktur; Android'in eski `b`'si okunmaz.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextLoc {
+    pub ch: i32,
+    pub p: f64,
+    pub c: Option<u32>,
 }
 
-/// Geçersizse `None`; `p` [0,1]'e kırpılır.
-pub fn parse_text_loc(s: &str) -> Option<(i32, f64)> {
-    let l: TextLoc = serde_json::from_str(s.trim()).ok()?;
+#[derive(serde::Deserialize)]
+struct RawLoc {
+    ch: i64,
+    p: f64,
+    #[serde(default)]
+    c: Option<i64>,
+}
+
+/// Geçersizse `None`; `p` [0,1]'e kırpılır, geçersiz `c` yok sayılır.
+pub fn parse_text_loc(s: &str) -> Option<TextLoc> {
+    let l: RawLoc = serde_json::from_str(s.trim()).ok()?;
     if l.ch < 0 || l.ch > i32::MAX as i64 || !l.p.is_finite() {
         return None;
     }
-    Some((l.ch as i32, l.p.clamp(0.0, 1.0)))
+    Some(TextLoc {
+        ch: l.ch as i32,
+        p: l.p.clamp(0.0, 1.0),
+        c: l.c.and_then(|c| u32::try_from(c).ok()),
+    })
 }
 
-/// Android ile aynı biçim.
-pub fn build_text_loc(ch: i32, p: f64) -> String {
-    format!("{{\"ch\":{},\"p\":{:.6}}}", ch.max(0), p.clamp(0.0, 1.0))
+/// Web ve Android ile aynı biçim.
+pub fn build_text_loc(ch: i32, p: f64, c: Option<u32>) -> String {
+    let base = format!("{{\"ch\":{},\"p\":{:.6}", ch.max(0), p.clamp(0.0, 1.0));
+    match c {
+        Some(c) => format!("{base},\"c\":{c}}}"),
+        None => format!("{base}}}"),
+    }
 }
 
 pub fn fmt_percent(p: f64) -> String {
@@ -214,18 +233,31 @@ mod tests {
 
     #[test]
     fn text_locator_roundtrip() {
-        assert_eq!(parse_text_loc("{\"ch\":3,\"p\":0.25}"), Some((3, 0.25)));
+        let loc = |ch, p, c| Some(TextLoc { ch, p, c });
+        assert_eq!(parse_text_loc("{\"ch\":3,\"p\":0.25}"), loc(3, 0.25, None));
         assert_eq!(
             parse_text_loc("{\"ch\":1,\"p\":0.5,\"b\":7}"),
-            Some((1, 0.5))
+            loc(1, 0.5, None)
         );
-        assert_eq!(parse_text_loc(" {\"ch\":0,\"p\":1.7} "), Some((0, 1.0)));
+        assert_eq!(
+            parse_text_loc("{\"c\":42,\"ch\":1,\"p\":0.5}"),
+            loc(1, 0.5, Some(42))
+        );
+        assert_eq!(
+            parse_text_loc("{\"ch\":1,\"p\":0.5,\"c\":-4}"),
+            loc(1, 0.5, None)
+        );
+        assert_eq!(parse_text_loc(" {\"ch\":0,\"p\":1.7} "), loc(0, 1.0, None));
         assert_eq!(parse_text_loc("12"), None);
         assert_eq!(parse_text_loc(""), None);
         assert_eq!(parse_text_loc("{\"ch\":-1,\"p\":0}"), None);
-        assert_eq!(build_text_loc(2, 0.5), "{\"ch\":2,\"p\":0.500000}");
-        let s = build_text_loc(4, 0.123456789);
-        assert_eq!(parse_text_loc(&s), Some((4, 0.123457)));
+        assert_eq!(build_text_loc(2, 0.5, None), "{\"ch\":2,\"p\":0.500000}");
+        assert_eq!(
+            build_text_loc(2, 0.5, Some(17)),
+            "{\"ch\":2,\"p\":0.500000,\"c\":17}"
+        );
+        let s = build_text_loc(4, 0.123456789, Some(9));
+        assert_eq!(parse_text_loc(&s), loc(4, 0.123457, Some(9)));
     }
 
     #[test]

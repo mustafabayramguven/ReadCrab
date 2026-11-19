@@ -25,7 +25,11 @@ import java.io.File
 
 sealed interface WebCommand {
     data class SetPrefs(val json: String) : WebCommand
-    data class Load(val path: String, val ch: Int, val ratio: Double, val block: Int) : WebCommand // path: "/book/{id}/c{n}.html"
+    /**
+     * path: "/book/{id}/c{n}.html". Konum önceliği: [anchor] (satır başı, `c`) → [block] (eski `b`) → [ratio].
+     * [pin]: "kaldığın yer" belirteci; -1 yok, -2 geri yüklenen satıra, ≥0 o satır başına.
+     */
+    data class Load(val path: String, val ch: Int, val ratio: Double, val block: Int, val anchor: Int, val pin: Int) : WebCommand
     data class Page(val dir: Int) : WebCommand // +1 ileri, -1 geri
 }
 
@@ -82,7 +86,7 @@ fun ReaderWebView(
         commands.collect { c ->
             val js = when (c) {
                 is WebCommand.SetPrefs -> "RC.setPrefs(${c.json})"
-                is WebCommand.Load -> "RC.load(${JSONObject.quote(c.path)}, ${c.ch}, ${c.ratio}, ${c.block})"
+                is WebCommand.Load -> "RC.load(${JSONObject.quote(c.path)}, ${c.ch}, ${c.ratio}, ${c.block}, ${c.anchor}, ${c.pin})"
                 is WebCommand.Page -> "RC.page(${c.dir})"
             }
             w.evaluateJavascript(js, null) // ana iş parçacığı: collect Main'de çalışır

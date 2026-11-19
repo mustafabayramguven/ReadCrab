@@ -1,7 +1,10 @@
 //! EPUB/MOBI/TXT okuyucu: bölüm gövdesi terminal genişliğine dizilir, kaydırarak okunur.
 //!
-//! Konum web ve Android ile aynı biçimdedir: `{"ch":bölüm,"p":bölüm içi kaydırma oranı}`,
-//! genel yüzde `(ch + p) / bölüm sayısı`.
+//! Konum web ve Android ile aynı biçimdedir: `{"ch":bölüm,"p":bölüm içi kaydırma oranı,
+//! "c":satır başı}`, genel yüzde `(ch + p) / bölüm sayısı`. Kaydedilen yer, ekranın en üstündeki
+//! satırın başıdır (`c`, bkz. `wrap::Laid::starts`); açılışta o satır en üste gelir ve solunda
+//! "kaldığın yer" belirteci (`▌`) durur. Belirteç oturum boyunca yerinde kalır, okuyucu
+//! kapanırken konum o anki satıra taşınır. Kitap başına tek konum olduğundan eşitleme değişmez.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -26,7 +29,9 @@ use crate::{
 };
 
 enum Target {
-    /// Kaydırma oranı (locator `p`).
+    /// Satır başı (locator `c`): o birimi içeren satır en üste gelir.
+    Line(u32),
+    /// Kaydırma oranı (locator `p`); `c`'siz eski kayıtlar.
     Ratio(f64),
     /// Bölüm metninin kesri (arama sonucu); isabet ekranın üst üçte birine gelir.
     Fraction(f64),
@@ -57,6 +62,8 @@ pub struct TextReader {
     cache: HashMap<i32, Arc<Vec<Block>>>,
     requested: HashSet<i32>,
     lines: Vec<Line<'static>>,
+    /// Satır başlarının bölümdeki sırası (`lines` ile aynı uzunlukta).
+    starts: Vec<u32>,
     laid: Option<(i32, usize)>,
     top: usize,
     view_h: usize,
@@ -68,6 +75,10 @@ pub struct TextReader {
     popup: Option<Popup>,
     width_pref: u16,
     suggestion_checked: bool,
+    /// "Kaldığın yer" belirteci: (bölüm, satır başı).
+    pin: Option<(i32, u32)>,
+    /// Konum `c`'siz (eski biçim): belirteç bu bölüm ilk dizildiğinde üstteki satıra konur.
+    pin_pending: Option<i32>,
 }
 
 const MIN_W: u16 = 30;
@@ -91,12 +102,15 @@ impl TextReader {
         ("+ / -", "metin genişliği"),
         ("N", "sonraki cilt"),
         ("r", "bölümü yeniden yükle"),
+        ("▌", "kaldığın satır; kapatınca o anki satıra taşınır"),
         ("q / Esc", "kütüphaneye dön"),
     ];
 
     pub fn new(ctx: &Ctx, detail: BookDetail) -> TextReader {
         let id = detail.book.id;
-        let (ch, p) = util::parse_text_loc(&detail.locator).unwrap_or((0, 0.0));
+        let loc = util::parse_text_loc(&detail.locator);
+        let ch = loc.map(|l| l.ch).unwrap_or(0);
+        let target = loc.map(target_of).unwrap_or(Target::Ratio(0.0));
         let session = Session::start(ctx, id, detail.book.percent, &detail.locator);
         let count = detail.book.page_count.max(1);
         let mut r = TextReader {
@@ -107,18 +121,24 @@ impl TextReader {
             cache: HashMap::new(),
             requested: HashSet::new(),
             lines: Vec::new(),
+            starts: Vec::new(),
             laid: None,
             top: 0,
             view_h: 20,
             fwd_lines: 0,
-            target: Some(Target::Ratio(p)),
+            target: Some(target),
             mark_after: false,
             error: None,
             session,
             popup: None,
             width_pref: 80,
             suggestion_checked: false,
+            pin: None,
+            pin_pending: None,
         };
+        if let Some(l) = loc {
+            r.pin_at(&l);
+        }
         ctx.spawn(move |core| {
             Some(Msg::TextInfo {
                 book_id: id,
@@ -193,10 +213,32 @@ impl TextReader {
             .unwrap_or_else(|| format!("Bölüm {}", self.ch + 1))
     }
 
+    /// Ekranın en üstündeki satırın başı.
+    fn anchor(&self) -> u32 {
+        self.starts.get(self.top).copied().unwrap_or(0)
+    }
+
+    fn locator(&self) -> String {
+        util::build_text_loc(self.ch, self.ratio(), Some(self.anchor()))
+    }
+
+    fn pin_at(&mut self, loc: &util::TextLoc) {
+        match loc.c {
+            Some(c) => {
+                self.pin = Some((loc.ch, c));
+                self.pin_pending = None;
+            }
+            None => {
+                self.pin = None;
+                self.pin_pending = Some(loc.ch);
+            }
+        }
+    }
+
     fn moved(&mut self) {
         self.session.input();
         if self.ready() {
-            let loc = util::build_text_loc(self.ch, self.ratio());
+            let loc = self.locator();
             self.session.mark(loc, self.percent());
         }
     }
@@ -209,6 +251,7 @@ impl TextReader {
         self.target = Some(target);
         self.laid = None;
         self.lines.clear();
+        self.starts.clear();
         self.top = 0;
         self.error = None;
         self.mark_after = mark;
@@ -272,10 +315,14 @@ impl TextReader {
         self.scroll(-p);
     }
 
-    fn go_locator(&mut self, ctx: &Ctx, loc: &str, mark: bool) -> bool {
+    /// `pin`: "kaldığın yer" belirteci de bu konuma taşınır (başka cihazdan gelen konum).
+    fn go_locator(&mut self, ctx: &Ctx, loc: &str, mark: bool, pin: bool) -> bool {
         match util::parse_text_loc(loc) {
-            Some((ch, p)) if ch < self.count => {
-                self.go(ctx, ch, Target::Ratio(p), mark);
+            Some(l) if l.ch < self.count => {
+                self.go(ctx, l.ch, target_of(l), mark);
+                if pin {
+                    self.pin_at(&l);
+                }
                 true
             }
             _ => false,
@@ -344,7 +391,7 @@ impl TextReader {
                     util::truncate(&self.chapter_title(), 90),
                     util::fmt_percent(self.percent())
                 );
-                let loc = util::build_text_loc(self.ch, self.ratio());
+                let loc = self.locator();
                 match ctx.core.add_bookmark(self.id(), loc, label) {
                     Ok(_) => fx.info("Yer imi eklendi."),
                     Err(e) => fx.error(e.to_string()),
@@ -419,7 +466,7 @@ impl TextReader {
                 MarkAct::None => Some(Popup::Marks(m)),
                 MarkAct::Close => None,
                 MarkAct::Go(loc) => {
-                    if !self.go_locator(ctx, &loc, true) {
+                    if !self.go_locator(ctx, &loc, true, false) {
                         fx.error("Yer imi bu kitapta geçersiz.");
                     }
                     None
@@ -436,7 +483,7 @@ impl TextReader {
                             .map(|p| (p.locator, p.percent))
                             .unwrap_or((s.locator.clone(), s.percent));
                         self.session.reset_saved(&loc.0, loc.1);
-                        if !self.go_locator(ctx, &loc.0, false) {
+                        if !self.go_locator(ctx, &loc.0, false, true) {
                             fx.error("Önerilen konum bu kitapta geçersiz.");
                         }
                     }
@@ -550,7 +597,7 @@ impl TextReader {
                         if !p.locator.is_empty() && p.locator != self.detail.locator {
                             self.session.reset_saved(&p.locator, p.percent);
                             self.detail.locator = p.locator.clone();
-                            self.go_locator(ctx, &p.locator, false);
+                            self.go_locator(ctx, &p.locator, false, true);
                         }
                     }
                 }
@@ -593,11 +640,13 @@ impl TextReader {
             return;
         };
         if self.laid != Some((self.ch, width)) {
-            // aynı bölüm yeniden diziliyorsa (pencere boyutu) oran korunur
+            // aynı bölüm yeniden diziliyorsa (pencere boyutu, genişlik) üstteki satır korunur
             if self.target.is_none() && self.laid.map(|l| l.0) == Some(self.ch) {
-                self.target = Some(Target::Ratio(self.ratio()));
+                self.target = Some(Target::Line(self.anchor()));
             }
-            self.lines = wrap::layout(&blocks, width);
+            let laid = wrap::layout(&blocks, width);
+            self.lines = laid.lines;
+            self.starts = laid.starts;
             self.laid = Some((self.ch, width));
             if self.target.is_none() {
                 self.top = 0;
@@ -606,6 +655,7 @@ impl TextReader {
         if let Some(t) = self.target.take() {
             let m = self.max_top();
             self.top = match t {
+                Target::Line(c) => wrap::line_of(&self.starts, c).min(m),
                 Target::Ratio(p) => (p.clamp(0.0, 1.0) * m as f64).round() as usize,
                 Target::Fraction(p) => {
                     let line = (p.clamp(0.0, 1.0) * self.lines.len() as f64) as usize;
@@ -618,6 +668,10 @@ impl TextReader {
             }
         }
         self.top = self.top.min(self.max_top());
+        if self.pin_pending == Some(self.ch) {
+            self.pin_pending = None;
+            self.pin = Some((self.ch, self.anchor()));
+        }
     }
 
     pub fn draw(&mut self, f: &mut Frame, ctx: &Ctx) {
@@ -654,6 +708,7 @@ impl TextReader {
             let end = (self.top + self.view_h).min(self.lines.len());
             let visible = self.lines[self.top.min(end)..end].to_vec();
             f.render_widget(Paragraph::new(Text::from(visible)), text_area);
+            self.draw_pin(f, body, text_area);
         } else if let Some(e) = &self.error {
             widgets::message(
                 f,
@@ -680,6 +735,32 @@ impl TextReader {
             Some(Popup::Marks(m)) => m.draw(f),
             Some(Popup::Search(s)) => draw_search(f, s),
             Some(Popup::Suggest(s)) => reader::draw_suggestion(f, s, percent),
+        }
+    }
+
+    /// "Kaldığın yer": satırın solundaki boşlukta `▌`; boşluk yoksa satırın ilk hücresi boyanır.
+    fn draw_pin(&self, f: &mut Frame, body: Rect, text_area: Rect) {
+        let Some((ch, c)) = self.pin else {
+            return;
+        };
+        if ch != self.ch || !self.ready() {
+            return;
+        }
+        let line = wrap::line_of(&self.starts, c);
+        if line < self.top || line >= self.top + self.view_h || line >= self.lines.len() {
+            return;
+        }
+        let y = text_area.y + (line - self.top) as u16;
+        let gap = text_area.x - body.x;
+        let style = Style::default().fg(theme::ACCENT);
+        if gap >= 1 {
+            let x = text_area.x - gap.min(2);
+            f.render_widget(Span::styled("▌", style), Rect::new(x, y, 1, 1));
+        } else {
+            f.buffer_mut().set_style(
+                Rect::new(text_area.x, y, 1, 1),
+                Style::default().bg(theme::ACCENT),
+            );
         }
     }
 
@@ -800,4 +881,11 @@ fn draw_search(f: &mut Frame, s: &mut Search) {
         })
         .collect();
     widgets::list(f, list, items, &mut s.state);
+}
+
+fn target_of(l: util::TextLoc) -> Target {
+    match l.c {
+        Some(c) => Target::Line(c),
+        None => Target::Ratio(l.p),
+    }
 }

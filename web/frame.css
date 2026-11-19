@@ -1,4 +1,7 @@
 html {
+  /* tarayıcının kendi kaydırma sabitlemesi kapalı: konumu okuyucu satır başıyla korur,
+     yazı tipi yüklenince kendiliğinden gelen kaydırma kullanıcı hareketi sanılmasın */
+  overflow-anchor: none;
   background: var(--bg);
   color: var(--fg);
   font-size: var(--fs, 18px);
@@ -77,4 +80,35 @@ html.paged :is(h1, h2, h3, h4) {
 html.paged p {
   orphans: 2;
   widows: 2;
+}
+
+/* Kaldığın yer: satırın solunda vurgu renginde çubuk (anchor.js koyar, metinle birlikte akar) */
+.rc-pin {
+  position: relative;
+}
+
+.rc-pin::before {
+  content: "";
+  position: absolute;
+  left: -0.7em;
+  top: 0.1em;
+  width: 0.22em;
+  height: 1.15em;
+  border-radius: 0.11em;
+  background: var(--link, currentColor);
+  pointer-events: none;
+  animation: rc-pin-in 0.6s ease-out;
+}
+
+@keyframes rc-pin-in {
+  from {
+    opacity: 0;
+    transform: scaleY(0.2);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rc-pin::before {
+    animation: none;
+  }
 }

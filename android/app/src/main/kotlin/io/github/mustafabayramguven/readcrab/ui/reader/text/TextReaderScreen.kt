@@ -222,6 +222,11 @@ class TextReaderViewModel(app: Application) : AndroidViewModel(app) {
     private var lastSavedLocator: String? = null
     // en son bilinen BLOK indeksi: yeniden düzende ve yeniden yüklemede konumu kesin korur
     private var curBlock = -1
+    private var curAnchor = -1
+    // "kaldığın yer" belirteci: açılıştaki konum; oturum boyunca yerinde kalır, sonraki açılışta taşınır.
+    // pinAnchor -2: konum eski biçimde (c yok), JS geri yüklenen satıra koyar ve "loaded" ile bildirir.
+    private var pinChapter = -1
+    private var pinAnchor = -1
     // başka cihaz konumu sorusu yanıtlanana dek bekleyen kitap bilgisi
     private var pendingLoad: Pair<BookDetail, TextInfo>? = null
 
@@ -271,7 +276,7 @@ class TextReaderViewModel(app: Application) : AndroidViewModel(app) {
             TextEvent.ToggleBookmark -> toggleBookmark()
             is TextEvent.OpenBookmark -> Locator.parse(e.b.locator)?.let { loc ->
                 _state.update { it.copy(sheet = TextSheet.NONE) }
-                loadChapter(loc.ch, loc.p)
+                loadChapter(loc.ch, loc.p, anchor = loc.c ?: -1)
             }
             is TextEvent.DeleteBookmark -> viewModelScope.launch(Dispatchers.IO) {
                 runCatching { core.deleteBookmark(e.localId) }.onFailure { handleError(it) }
@@ -285,7 +290,7 @@ class TextReaderViewModel(app: Application) : AndroidViewModel(app) {
             }
             is TextEvent.Page -> _commands.tryEmit(WebCommand.Page(e.dir))
             TextEvent.Retry ->
-                if (dataReady) loadChapter(_state.value.chapter, _state.value.ratio, curBlock) else load(bookId)
+                if (dataReady) loadChapter(_state.value.chapter, _state.value.ratio, curBlock, curAnchor) else load(bookId)
             TextEvent.AcceptSuggestion -> resolveSuggestion(true)
             TextEvent.DeclineSuggestion -> resolveSuggestion(false)
             is TextEvent.PatchPrefs -> rc.prefs.update(e.f)
@@ -349,10 +354,14 @@ class TextReaderViewModel(app: Application) : AndroidViewModel(app) {
         val here = loc != null && loc.ch == ch
         val ratio = if (here) loc?.p ?: 0.0 else 0.0
         val block = if (here) loc?.b ?: -1 else -1
+        val anchor = if (here) loc?.c ?: -1 else -1
         val bookmarks = core.listBookmarks(id)
         val percent = ((ch + ratio) / info.chapterCount).coerceIn(0.0, 1.0)
-        lastSavedLocator = loc?.let { Locator.build(it.ch, it.p, it.b) }
+        lastSavedLocator = loc?.let { Locator.build(it.ch, it.p, it.c) }
         curBlock = block
+        curAnchor = anchor
+        pinChapter = if (here) ch else -1
+        pinAnchor = if (anchor >= 0) anchor else -2
         tracker.start(id, percent)
         _state.update {
             it.copy(
@@ -382,21 +391,23 @@ class TextReaderViewModel(app: Application) : AndroidViewModel(app) {
     private fun startWeb() {
         if (!webReady || !dataReady) return
         emitPrefs()
-        loadChapter(_state.value.chapter, _state.value.ratio, curBlock)
+        loadChapter(_state.value.chapter, _state.value.ratio, curBlock, curAnchor)
     }
 
-    private fun loadChapter(ch: Int, ratio: Double, block: Int = -1) {
+    private fun loadChapter(ch: Int, ratio: Double, block: Int = -1, anchor: Int = -1) {
         val s = _state.value
         val target = ch.coerceIn(0, max(s.chapterCount - 1, 0))
         val r = ratio.coerceIn(0.0, 1.0)
         val id = bookId
         curBlock = block
+        curAnchor = anchor
+        val pin = if (target == pinChapter) pinAnchor else -1
         _state.update { it.copy(loading = true, error = null, chapter = target, ratio = r, showNextCard = false) }
         chapterJob?.cancel()
         chapterJob = viewModelScope.launch(Dispatchers.IO) {
             try {
                 core.ensureChapter(id, target)
-                _commands.emit(WebCommand.Load("/book/$id/c$target.html", target, r, block))
+                _commands.emit(WebCommand.Load("/book/$id/c$target.html", target, r, block, anchor, pin))
             } catch (e: CancellationException) {
                 throw e
             } catch (e: CoreException.Offline) {
@@ -419,9 +430,9 @@ class TextReaderViewModel(app: Application) : AndroidViewModel(app) {
                 webReady = true
                 startWeb()
             }
-            "loaded" -> onLoaded(o.optInt("ch"), o.optInt("pages", 1))
+            "loaded" -> onLoaded(o.optInt("ch"), o.optInt("pages", 1), o.optInt("pin", -1))
             "pos" -> onPos(
-                ch = o.optInt("ch"), p = o.optDouble("p", 0.0), b = o.optInt("b", -1),
+                ch = o.optInt("ch"), p = o.optDouble("p", 0.0), b = o.optInt("b", -1), c = o.optInt("c", -1),
                 nb = o.optInt("nb", 0), page = o.optInt("page"), pages = o.optInt("pages", 1),
                 user = o.optInt("u") == 1,
             )
@@ -431,9 +442,10 @@ class TextReaderViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun onLoaded(ch: Int, pages: Int) {
+    private fun onLoaded(ch: Int, pages: Int, pin: Int) {
         val s = _state.value
         if (ch != s.chapter) return
+        if (ch == pinChapter && pin >= 0) pinAnchor = pin // -2 çözüldü: sonraki yüklemelerde aynı satır
         _state.update { it.copy(loading = false, error = null, pages = pages.coerceAtLeast(1)) }
         // sonraki bölüm arka planda hazırlanır
         if (ch + 1 < s.chapterCount) {
@@ -442,7 +454,7 @@ class TextReaderViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun onPos(ch: Int, p: Double, b: Int, nb: Int, page: Int, pages: Int, user: Boolean) {
+    private fun onPos(ch: Int, p: Double, b: Int, c: Int, nb: Int, page: Int, pages: Int, user: Boolean) {
         val s = _state.value
         if (ch != s.chapter) return // eski bölümden gecikmiş mesaj
         val ratio = p.coerceIn(0.0, 1.0)
@@ -451,6 +463,7 @@ class TextReaderViewModel(app: Application) : AndroidViewModel(app) {
         val pg = pages.coerceAtLeast(1)
         val block = b.takeIf { it >= 0 }
         curBlock = b
+        curAnchor = c
         // UI durumu her mesajda güncellenir
         _state.update {
             it.copy(
@@ -463,7 +476,7 @@ class TextReaderViewModel(app: Application) : AndroidViewModel(app) {
         if (!user) return // yerleşim / yeniden düzen konum kaydı değildir
         tracker.addPage(if (block != null) "$ch:$block" else "$ch:$page")
         tracker.setPercent(percent)
-        val loc = Locator.build(ch, ratio, block)
+        val loc = Locator.build(ch, ratio, c.takeIf { it >= 0 })
         if (loc == lastSavedLocator) return
         lastSavedLocator = loc
         // sayfa modunda her çevirmede hemen, kaydırmada paragraf değişince ~2 sn sonra it
@@ -490,8 +503,8 @@ class TextReaderViewModel(app: Application) : AndroidViewModel(app) {
                     near.forEach { core.deleteBookmark(it.localId) }
                 } else {
                     val label = rc.getString(R.string.reader_chapter_percent, s.chapter + 1, formatPercent(s.percent))
-                    // yer imi b'siz yazılır: web ile birebir
-                    core.addBookmark(id, Locator.build(s.chapter, s.ratio, null), label)
+                    // web ile aynı biçim: satır başı (c) dahil
+                    core.addBookmark(id, Locator.build(s.chapter, s.ratio, curAnchor.takeIf { it >= 0 }), label)
                 }
             }.onFailure { handleError(it) }
             reloadBookmarks()

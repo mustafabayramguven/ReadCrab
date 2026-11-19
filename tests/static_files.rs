@@ -38,6 +38,7 @@ async fn static_files_have_expected_types() {
         ("fonts/roboto-flex-latin.woff2", "font/woff2"),
         ("fonts/roboto-flex-latin-ext.woff2", "font/woff2"),
         ("calc.js", "application/javascript; charset=utf-8"),
+        ("anchor.js", "application/javascript; charset=utf-8"),
         ("reader-ui.js", "application/javascript; charset=utf-8"),
         ("reader-fonts.css", "text/css; charset=utf-8"),
         ("manifest.webmanifest", "application/manifest+json"),
@@ -142,6 +143,7 @@ async fn index_html_script_and_style_rules() {
     for other in [
         "tracker.js",
         "calc.js",
+        "anchor.js",
         "reader-ui.js",
         "reader-comic.js",
         "reader-text.js",
@@ -167,13 +169,15 @@ async fn index_html_script_and_style_rules() {
         count += 1;
         rest = &after[end + 1..];
     }
-    assert_eq!(count, 8);
+    assert_eq!(count, 9);
 
     // calc.js ve reader-ui.js, reader-comic.js'ten önce
     let comic = html.find("/static/reader-comic.js").unwrap();
     for early in ["calc.js", "reader-ui.js"] {
         assert!(html.find(&format!("/static/{early}")).unwrap() < comic);
     }
+    // anchor.js (KRS_ANCHOR), reader-text.js'ten önce
+    assert!(html.find("/static/anchor.js").unwrap() < html.find("/static/reader-text.js").unwrap());
     for needle in [
         "rel=\"manifest\"",
         "/static/reader-fonts.css",

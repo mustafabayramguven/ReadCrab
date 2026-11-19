@@ -28,6 +28,7 @@ Veritabanı ilk açılışta otomatik olarak yeni şemaya geçer (`user_version`
 - **Saf siyah:** Hesap > Görünüm altında; koyu modda AMOLED için tam siyah zemin.
 - **Özel kapak:** Yönetici, seri sayfasından kapağı JPEG, PNG veya WebP ile değiştirebilir. Yeniden tarama özel kapağı ezmez.
 - **Okuma takvimi:** Geçmiş sayfasında yıllık ısı haritası, gün süzgeci ve okuma ritmi grafikleri.
+- **Kaldığın satır:** Metin kitaplarda kalınan yer ekranın en üstündeki satırın başıdır. Kitap yeniden açılınca o satır en üste gelir, solunda vurgu renginde bir çubuk durur. Çubuk oturum boyunca yerinde kalır; okuyucu kapanınca konum o anki satıra taşınır. Satır başı yazı boyutundan ve ekran genişliğinden bağımsız tutulur: web, Android ve terminal okuyucu aynı satırı bulur.
 - **Yer imleri ve kitap içi arama:** Metin kitaplarda (EPUB, MOBI) yer imi ekleme ve arama.
 - **Sonraki cilt:** Kitabın sonunda bir sonraki cildi açma kartı.
 - **Çizgi roman:** Sağdan sola okuma yönü ve dikey (webtoon) görünüm.
@@ -46,7 +47,7 @@ readcrab-tui                  # ilk açılışta sunucu adresi, kullanıcı adı
 readcrab-tui --halfblocks     # grafik protokolü olmayan terminaller için
 ```
 
-- **Metin kitaplar (EPUB, MOBI):** Bölüm terminal genişliğine dizilir; başlık, liste, alıntı, kalın/italik korunur, görseller `[görsel: …]` olarak gösterilir. Boşluk sonraki sayfa, `t` içindekiler, `m`/`M` yer imi, `/` kitapta arama, `+`/`-` metin genişliği.
+- **Metin kitaplar (EPUB, MOBI):** Bölüm terminal genişliğine dizilir; başlık, liste, alıntı, kalın/italik korunur, görseller `[görsel: …]` olarak gösterilir. Boşluk sonraki sayfa, `t` içindekiler, `m`/`M` yer imi, `/` kitapta arama, `+`/`-` metin genişliği. Kaldığın satırın solunda `▌` görünür.
 - **Çizgi roman (CBZ, CBR):** Sayfalar terminalin desteklediği protokolle çizilir (sixel: foot, WezTerm, xterm; kitty; iTerm2), yoksa yarım blok karakterlerle.
 - **Çevrimdışı:** Seride `d` kitabı, `D` serinin tamamını indirir. Bağlantı yokken yapılan ilerleme yerelde bekler, bağlantı gelince gönderilir.
 - Her ekranda `?` o ekranın tuşlarını gösterir.
