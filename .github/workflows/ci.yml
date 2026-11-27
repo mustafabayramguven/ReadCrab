@@ -106,10 +106,25 @@ jobs:
           docker rm -f e2e || true
           docker volume rm e2e-data || true
 
+  # Her mimari kendi native runner'ında derlenir (QEMU yok), smoke testten geçer,
+  # etiketsiz olarak digest ile ghcr'a itilir; merge işi tek bir :latest manifest'i yapar.
   publish:
     needs: [image, e2e]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+            cache: buildkit          # image işinin yazdığı varsayılan gha önbelleği
+          - platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            cache: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: write
@@ -117,15 +132,68 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+      - run: test -f Cargo.lock
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+      - name: Derle (yerel)
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
-          push: true
-          tags: ghcr.io/mustafabayramguven/readcrab:latest
-          platforms: linux/amd64
-          cache-from: type=gha
+          push: false
+          load: true
+          tags: readcrab:${{ matrix.arch }}
+          platforms: ${{ matrix.platform }}
+          cache-from: type=gha,scope=${{ matrix.cache }}
+          cache-to: type=gha,scope=${{ matrix.cache }},mode=max
+      - name: Smoke test (${{ matrix.arch }})
+        run: bash scripts/smoke.sh "readcrab:${{ matrix.arch }}"
+      - name: Digest ile it
+        id: push
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=ghcr.io/mustafabayramguven/readcrab,push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.cache }}
+      - name: Digest'i kaydet
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: digests-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish-manifest:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: amd64 + arm64 -> :latest
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          img=ghcr.io/mustafabayramguven/readcrab
+          [ "$(ls | wc -l)" = 2 ] || { echo "::error::2 digest bekleniyordu"; ls; exit 1; }
+          docker buildx imagetools create -t "$img:latest" $(printf "$img@sha256:%s " *)
+          docker buildx imagetools inspect "$img:latest"
+          docker buildx imagetools inspect "$img:latest" | grep -q 'linux/arm64'
+          docker buildx imagetools inspect "$img:latest" | grep -q 'linux/amd64'
